@@ -8,7 +8,14 @@ authors = [
 ]
 requires-python = ">=3.14"
 dependencies = [
+    "click>=8.5.0",
+    "datasets>=5.1.0",
     "flock",
+    "httpx>=0.28.1",
+    "huggingface-hub>=2.4.0",
+    "pylance>=14.0.2",
+    "torch>=2.15.0",
+    "transformers>=5.22.1",
 ]
 
 [project.scripts]
