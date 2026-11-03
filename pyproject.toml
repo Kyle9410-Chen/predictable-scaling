@@ -1,0 +1,22 @@
+[project]
+name = "predictable-scaling"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "Kyle9410-Chen", email = "kyle941010@gmail.com" }
+]
+requires-python = ">=3.14"
+dependencies = [
+    "flock",
+]
+
+[project.scripts]
+predictable-scaling = "predictable_scaling:main"
+
+[build-system]
+requires = ["uv_build>=0.12.18,<0.13.0"]
+build-backend = "uv_build"
+
+[tool.uv.sources]
+flock = { git = "https://github.com/cerulean-works/flock.git", rev = "2942f4026aa141e11f748c0ef4df4ca782eb2629" }
