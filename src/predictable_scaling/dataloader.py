@@ -1,17 +1,12 @@
 import lance
-import os
 from flock.hub import s3
 
 def load_dataset():
+    s3.get_process(read_only=True)
+    
     ds = lance.dataset(
         "s3://flock-datasets/fineweb-edu",
-        storage_options={
-            "aws_endpoint": "https://s3.flock.cerulean.works",
-            "aws_access_key_id": os.getenv("S3_ACCESS_KEY_ID"),
-            "aws_secret_access_key": os.getenv("S3_SECRET_ACCESS_KEY"),
-            "aws_region": "us-east-1",
-            "aws_virtual_hosted_style_request": "false",
-        },
+        version=1
     )
 
     return ds
@@ -20,6 +15,7 @@ def main():
     ds = load_dataset()
     print(ds.version, ds.count_rows())
     print(ds.schema)
+    print(ds.take([0, 1]).to_pylist())
 
 if __name__ == "__main__":
     main()
