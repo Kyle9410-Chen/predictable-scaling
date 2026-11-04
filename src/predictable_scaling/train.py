@@ -21,6 +21,7 @@ def train(model: DistributedDataParallel, opt, loader, info, max_tokens, log_con
         model.train()
         tokens_seen = 0
         step = 0
+        lr = 1e-3
 
         for step, batch in enumerate(loader, start=1):
             batch = {k: v.to(info.device, non_blocking=True) for k, v in batch.items()}
@@ -45,7 +46,14 @@ def train(model: DistributedDataParallel, opt, loader, info, max_tokens, log_con
                 dist.all_reduce(avg_loss, op=dist.ReduceOp.AVG)
                 dist.all_reduce(max_loss, op=dist.ReduceOp.MAX)
                 if info.is_main:
-                    run.log({"loss": avg_loss.item()}, step=step)
+                    run.log(
+                        {
+                            "loss": avg_loss.item(), 
+                            "loss_max": max_loss.item(), 
+                            "lr": lr
+                        }, 
+                        step=step
+                    )
                     print(f"step={step} tokens={tokens_seen:,} loss={avg_loss.item():.4f} loss_max={max_loss.item():.4f}")
 
             if tokens_seen >= max_tokens:
