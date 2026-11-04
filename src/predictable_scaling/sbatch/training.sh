@@ -9,7 +9,6 @@
 #SBATCH --cpus-per-task=64
 #SBATCH --time=03:00:00
 #SBATCH --output=logs/%x-%j.out
-#SBATCH --error=logs/%x-%j.err
 
 set -euo pipefail
 cd "$SLURM_SUBMIT_DIR"
@@ -22,6 +21,7 @@ export HF_HOME=/work/${USER}/.cache/huggingface
 export TOKENIZERS_PARALLELISM=false
 export NCCL_DEBUG=WARN
 export NCCL_SOCKET_IFNAME=lo
+export PYTHONUNBUFFERED=1
 
 uv sync --frozen
 
