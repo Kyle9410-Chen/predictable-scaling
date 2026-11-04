@@ -1,12 +1,12 @@
 from transformers import LlamaConfig, AutoModelForCausalLM
 
 """
-Requested budget	Layers (L)	Hidden (d)	MLP (m)	Query heads	KV heads	Actual parameters
-150M	6	768	3,072	12	3	149,825,280
+Requested budget	Layers (L)  Hidden (d)	MLP (m)	Query heads	KV heads	Actual parameters
+150M	6	768	    3,072	12	3	149,825,280
 300M	9	1,024	5,184	16	4	298,273,792
 500M	11	1,536	4,672	24	6	498,731,520
 750M	13	1,792	5,888	28	7	745,749,760
-1B	15	1,792	8,000	28	7	995,432,704
+1B	    15	1,792	8,000	28	7	995,432,704
 """
 
 class ModelScaleConfig:
