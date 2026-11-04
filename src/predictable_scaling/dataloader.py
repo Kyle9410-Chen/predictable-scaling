@@ -1,5 +1,5 @@
 from lance.torch.data import SafeLanceDataset
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, DistributedSampler
 from flock.hub import s3
 from transformers import AutoTokenizer
 
@@ -19,12 +19,12 @@ class Collator:
 
         ids = enc["input_ids"]
         mask = enc["attention_mask"].bool()
-        labels = ids[:, 1:].clone()
-        labels.masked_fill_(~(mask[:, :-1] & mask[:, 1:]), -100)
+        labels = ids.clone()
+        labels.masked_fill_(~mask, -100)
 
         return {
-            "input_ids": ids[:, :-1],
-            "attention_mask": mask[:, :-1],
+            "input_ids": ids,
+            "attention_mask": mask,
             "labels": labels
             }
 
@@ -38,25 +38,20 @@ def load_dataset():
 
     tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-3.2-1B")
     tokenizer.pad_token = tokenizer.eos_token
+    tokenizer.padding_side = "right"
+
+    sampler = DistributedSampler(ds, shuffle=True, drop_last=True)
 
     loader = DataLoader(
         dataset=ds,
         batch_size=32,
-        shuffle=True,
+        sampler=sampler,
+        drop_last=True,
         num_workers=4,
         multiprocessing_context="spawn",
         persistent_workers=True,
+        pin_memory=True,
         collate_fn=Collator(tokenizer)
     )
 
     return loader
-
-def main():
-    loader = load_dataset()
-    batch = next(iter(loader))
-    for k, v in batch.items():
-        print(k, v.shape, v.dtype)
-    print((batch["labels"] != -100).float().mean().item())
-
-if __name__ == "__main__":
-    main()

@@ -756,6 +756,18 @@ wheels = [
 ]
 
 [[package]]
+name = "muonium"
+version = "0.2.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "torch" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/13/aa/790708379df37d9dc8d1a48b6423fddf5d9bafb0335adf5a4b237f6675b0/muonium-0.2.0.tar.gz", hash = "sha256:250c501f9cf4ebb3685f04b491ec75062c6db463e8f6e922b5b20cca06ef5355", size = 24410, upload-time = "2026-07-21T21:11:35.865Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/59/0c/c57aa480bd1cea06e71878fd12e9f991514a75fb9f3053af9ef15dffd3cb/muonium-0.2.0-py3-none-any.whl", hash = "sha256:88dd428ec681f8b6abbd63e16d1e85a8df7dd01f3f1d3d2accce32be27b9ed99", size = 32895, upload-time = "2026-07-21T21:11:34.665Z" },
+]
+
+[[package]]
 name = "networkx"
 version = "3.7"
 source = { registry = "https://pypi.org/simple" }
@@ -1034,6 +1046,7 @@ dependencies = [
     { name = "flock" },
     { name = "httpx" },
     { name = "huggingface-hub" },
+    { name = "muonium" },
     { name = "pylance" },
     { name = "torch" },
     { name = "transformers" },
@@ -1046,6 +1059,7 @@ requires-dist = [
     { name = "flock", git = "https://github.com/cerulean-works/flock.git?rev=2942f4026aa141e11f748c0ef4df4ca782eb2629" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "huggingface-hub", specifier = ">=2.4.0" },
+    { name = "muonium", specifier = ">=0.2.0" },
     { name = "pylance", specifier = ">=14.0.2" },
     { name = "torch", specifier = ">=2.15.0" },
     { name = "transformers", specifier = ">=5.22.1" },
