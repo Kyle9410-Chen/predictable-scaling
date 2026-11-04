@@ -44,7 +44,7 @@ def load_dataset():
 
     loader = DataLoader(
         dataset=ds,
-        batch_size=32,
+        batch_size=4,
         sampler=sampler,
         drop_last=True,
         num_workers=4,

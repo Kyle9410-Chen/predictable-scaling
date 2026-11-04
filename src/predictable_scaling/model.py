@@ -64,7 +64,7 @@ def build_model(attn_impl="kernels-community/flash-attn3", scale="150M", config=
         num_attention_heads=cfg.heads,
         num_key_value_heads=cfg.kv_heads,
         head_dim=cfg.HEAD_DIM,
-        hidden_act="sliu",
+        hidden_act="silu",
         max_position_embeddings=4096,
         rms_norm_eps=1e-5,
         rope_theta=500000.0,
