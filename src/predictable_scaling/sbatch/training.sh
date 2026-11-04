@@ -30,6 +30,9 @@ nvidia-smi
 
 uv run --frozen --env-file .env torchrun \
     -m predictable_scaling.main \
-    --max-tokens 100000
+    --max-tokens 100000 \
+    --name training-parameter-smoke \
+    --tags smoke \
+    --log-every 10
 
 echo "done: $(date)"

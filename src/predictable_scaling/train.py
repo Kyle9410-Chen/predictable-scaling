@@ -34,12 +34,22 @@ def train(model: DistributedDataParallel, opt, loader, info, max_tokens, log_con
                         labels=batch["labels"]
                     ).loss
             loss.backward()
+            
+            # log grad norm
+            if step % log_config.log_every == 0:
+                total_norm = torch.norm(
+                    torch.stack([torch.norm(p.grad.detach(), 2) for p in model.parameters() if p.grad is not None]),
+                    2
+                )
+                run.log({"grad_norm": total_norm.item()})
+
             opt.step()
 
             step_tokens = (batch["labels"][:, 1:] != -100).sum()
             dist.all_reduce(step_tokens, op=dist.ReduceOp.SUM)
             tokens_seen += step_tokens.item()
 
+            # log loss, token_seen, lr
             if step % log_config.log_every == 0:
                 avg_loss = loss.detach().clone()
                 max_loss = loss.detach().clone()
