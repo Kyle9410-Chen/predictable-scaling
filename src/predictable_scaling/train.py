@@ -41,7 +41,7 @@ def train(model: DistributedDataParallel, opt, loader, info, max_tokens, log_con
                     torch.stack([torch.norm(p.grad.detach(), 2) for p in model.parameters() if p.grad is not None]),
                     2
                 )
-                run.log({"grad_norm": total_norm.item()})
+                run.log({"train/grad_norm": total_norm.item()}, step=step)
 
             opt.step()
 
@@ -58,10 +58,10 @@ def train(model: DistributedDataParallel, opt, loader, info, max_tokens, log_con
                 if info.is_main:
                     run.log(
                         {
-                            "loss": avg_loss.item(), 
-                            "loss_max": max_loss.item(), 
-                            "lr": lr,
-                            "token_seen": tokens_seen
+                            "train/loss": avg_loss.item(), 
+                            "train/loss_max": max_loss.item(), 
+                            "train/lr": lr,
+                            "train/total_tokens_seen": tokens_seen
                         }, 
                         step=step
                     )
