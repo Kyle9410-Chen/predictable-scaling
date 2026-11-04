@@ -3,6 +3,7 @@ import torch
 import argparse
 import torch.distributed as dist
 
+from dataclasses import dataclass
 from torch.nn.parallel import DistributedDataParallel
 
 from predictable_scaling.optimizer import muon
@@ -10,6 +11,7 @@ from predictable_scaling.dataloader import load_dataset
 from predictable_scaling.model import build_model
 from predictable_scaling.train import train
 
+@dataclass(frozen=True)
 class DistInfo:
     rank: int
     world_size: int
