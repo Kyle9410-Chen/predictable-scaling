@@ -1,8 +1,8 @@
 import os
 import torch
+import argparse
 import torch.distributed as dist
 
-from transformers import LlamaConfig, AutoModelForCausalLM
 from torch.nn.parallel import DistributedDataParallel
 
 from predictable_scaling.optimizer import muon
@@ -31,15 +31,22 @@ def setup_distributed() -> DistInfo:
         device = torch.device("cuda", local_rank)
     )
 
+def get_args():
+    p = argparse.ArgumentParser()
+    p.add_argument("--max-tokens", type=int, default=30e9)
+
+    return p.parse_args()
+
 def main():
     info = setup_distributed()
+    args = get_args()
 
     try:
         model = build_model().to(info.device)
         opt = muon(model)
         loader = load_dataset()
         model = DistributedDataParallel(model, device_ids=[info.local_rank])
-        train(model, opt, loader, info)
+        train(model, opt, loader, info, max_tokens=args.max_tokens)
 
     finally:
         dist.destroy_process_group()
