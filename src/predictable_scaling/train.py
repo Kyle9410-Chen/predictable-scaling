@@ -50,7 +50,8 @@ def train(model: DistributedDataParallel, opt, loader, info, max_tokens, log_con
                         {
                             "loss": avg_loss.item(), 
                             "loss_max": max_loss.item(), 
-                            "lr": lr
+                            "lr": lr,
+                            "token_seen": tokens_seen
                         }, 
                         step=step
                     )
