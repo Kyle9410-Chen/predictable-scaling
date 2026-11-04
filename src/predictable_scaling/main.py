@@ -11,6 +11,8 @@ from predictable_scaling.dataloader import load_dataset
 from predictable_scaling.model import build_model
 from predictable_scaling.train import train
 
+from predictable_scaling.train import LogConfig
+
 @dataclass(frozen=True)
 class DistInfo:
     rank: int
@@ -48,7 +50,7 @@ def main():
         opt = muon(model)
         loader = load_dataset()
         model = DistributedDataParallel(model, device_ids=[info.local_rank])
-        train(model, opt, loader, info, max_tokens=args.max_tokens)
+        train(model, opt, loader, info, max_tokens=args.max_tokens, log_config=LogConfig(name="training-loop-smoke", tags=["smoke"]))
 
     finally:
         dist.destroy_process_group()
