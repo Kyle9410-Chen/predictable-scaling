@@ -11,6 +11,8 @@ from predictable_scaling.dataloader import load_dataset
 from predictable_scaling.model import build_model
 from predictable_scaling.train import train
 
+from predictable_scaling.train import LogConfig
+
 @dataclass(frozen=True)
 class DistInfo:
     rank: int
@@ -36,6 +38,9 @@ def setup_distributed() -> DistInfo:
 def get_args():
     p = argparse.ArgumentParser()
     p.add_argument("--max-tokens", type=int, default=30e9)
+    p.add_argument("--log-every", type=int, default=10)
+    p.add_argument("--name", type=str, default="training")
+    p.add_argument("--tags", type=str, default="") # tag is comma seperated
 
     return p.parse_args()
 
@@ -48,7 +53,7 @@ def main():
         opt = muon(model)
         loader = load_dataset()
         model = DistributedDataParallel(model, device_ids=[info.local_rank])
-        train(model, opt, loader, info, max_tokens=args.max_tokens)
+        train(model, opt, loader, info, max_tokens=args.max_tokens, log_config=LogConfig(name=args.name, log_every=args.log_every, tags=args.tags.split(",")))
 
     finally:
         dist.destroy_process_group()
