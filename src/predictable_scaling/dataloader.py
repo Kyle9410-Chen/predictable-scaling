@@ -10,14 +10,14 @@ from transformers import AutoTokenizer
 class SequentialLanceDataset(IterableDataset):
     def __init__(self, uri, rank, world_size, version=1, column="text", 
                  buffer_size=4096, seed=0, read_batch_size=256):
-        self.uri = uri
-        self.rank = rank
-        self.world_size = world_size
-        self.version = version
-        self.column = column
-        self.buffer_size = buffer_size
-        self.seed = seed
-        self.read_batch_size = read_batch_size
+        self.uri: str = uri
+        self.rank: int = rank
+        self.world_size: int = world_size
+        self.version: int = version
+        self.column: str = column
+        self.buffer_size: int = buffer_size
+        self.seed: int = seed
+        self.read_batch_size: int = read_batch_size
 
     def _rows(self, shard, num_shards):
         ds = lance.dataset(self.uri, version=self.version)
