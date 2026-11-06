@@ -32,6 +32,8 @@ def train(
             )
     
     model.train()
+    last_time = time.perf_counter()
+    last_token = 0
     tokens_seen = 0
     step = 0
     lr = 1e-3
@@ -70,13 +72,19 @@ def train(
             max_loss = loss.detach().clone()
             dist.all_reduce(avg_loss, op=dist.ReduceOp.AVG)
             dist.all_reduce(max_loss, op=dist.ReduceOp.MAX)
+
+            now = time.perf_counter()
+            tokens_per_sec = (tokens_seen - last_token) / (now - last_time)
+            last_time, last_token = time.perf_counter(), tokens_seen
+
             if dist_info.is_main:
                 wandb.log(
                     {
                         "train/loss": avg_loss.item(), 
                         "train/loss_max": max_loss.item(), 
                         "train/lr": float(opt.param_groups[0]["lr"]),
-                        "train/total_tokens_seen": tokens_seen
+                        "train/total_tokens_seen": tokens_seen,
+                        "train/tokens_per_second": tokens_per_sec
                     }, 
                     step=step
                 )
