@@ -52,7 +52,7 @@ def main():
         model = build_model().to(dist_info.device)
         opt = muon(model)
         train_loader = load_dataset(dist_info.rank, dist_info.world_size, split="train")
-        eval_loader = load_dataset(dist_info.rank, dist_info.world_size, split="eval")
+        eval_loader = load_dataset(dist_info.rank, dist_info.world_size, split="eval", workers=4)
         model = DistributedDataParallel(model, device_ids=[dist_info.local_rank])
         shape = wsd_shape()
         scheduler = TokenLRScheduler(opt, shape, args.max_tokens)

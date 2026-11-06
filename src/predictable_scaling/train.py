@@ -94,12 +94,16 @@ def train(
 
         # evaluation
         if step % log_config.eval_every == 0:
+            eval_start = time.perf_counter()
             eval_loss = eval(model, eval_loader, dist_info)
+            eval_end = time.perf_counter()
+            last_time = last_time + (eval_end - eval_start) # leave the eval time out of tokens/sec calculation
             if dist_info.is_main:
                 wandb.log(
                     {
                         "eval/loss": eval_loss,
-                        "eval/perplexity": torch.exp(torch.tensor(eval_loss))
+                        "eval/perplexity": torch.exp(torch.tensor(eval_loss)),
+                        "eval/seconds": eval_end - eval_start
                     },
                     step=step
                 )

@@ -87,29 +87,52 @@ class Collator:
             "labels": labels
             }
     
-def load_dataset(rank: int, world_size: int, split: str="train"):
+def load_dataset(rank: int, world_size: int, split: str="train", workers: int=8) -> DataLoader:
     s3.get_process(read_only=True)
-
-    ds = SequentialLanceDataset(
-        "s3://flock-datasets/fineweb-edu",
-        rank=rank,
-        world_size=world_size,
-        split=split
-    )
 
     tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-3.2-1B")
     tokenizer.pad_token = tokenizer.eos_token
     tokenizer.padding_side = "right"
 
+    loader: DataLoader = None
 
-    loader = DataLoader(
-        dataset=ds,
-        batch_size=4,
-        num_workers=8,
-        multiprocessing_context="spawn",
-        persistent_workers=True,
-        pin_memory=True,
-        collate_fn=Collator(tokenizer)
-    )
+    # list evaluation set in memory prevent loading it every time
+    if split == "eval":
+        ds = SequentialLanceDataset(
+                "s3://flock-datasets/fineweb-edu",
+                rank=0,
+                world_size=1,
+                split="eval"
+            )
+        rows = list(ds)
+        sampler = DistributedSampler(rows, num_replicas=world_size, rank=rank, shuffle=False)
+
+        return DataLoader(
+            dataset=rows,
+            batch_size=4,
+            num_workers=workers,
+            persistent_workers=True,
+            sampler=sampler,
+            pin_memory=True,
+            collate_fn=Collator(tokenizer)
+        )
+
+    else:
+        ds = SequentialLanceDataset(
+                "s3://flock-datasets/fineweb-edu",
+                rank=rank,
+                world_size=world_size,
+                split="train"
+            )
+    
+        loader = DataLoader(
+            dataset=ds,
+            batch_size=4,
+            num_workers=workers,
+            multiprocessing_context="spawn",
+            persistent_workers=True,
+            pin_memory=True,
+            collate_fn=Collator(tokenizer)
+        )
 
     return loader
