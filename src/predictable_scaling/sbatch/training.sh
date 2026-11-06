@@ -7,7 +7,7 @@
 #SBATCH --ntasks-per-node=1
 #SBATCH --gpus-per-node=8
 #SBATCH --cpus-per-task=64
-#SBATCH --time=03:00:00
+#SBATCH --time=00:20:00
 #SBATCH --output=logs/%x-%j.out
 
 set -euo pipefail
@@ -22,15 +22,18 @@ export TOKENIZERS_PARALLELISM=false
 export NCCL_DEBUG=WARN
 export NCCL_SOCKET_IFNAME=lo
 export PYTHONUNBUFFERED=1
+export OMP_NUM_THREADS=1
 
 uv sync --frozen
 
 echo "host: $(hostname) | start: $(date)"
 nvidia-smi
 
-uv run --frozen --env-file .env torchrun \
+ulimit -u "$(ulimit -Hu)"
+
+uv run --frozen --env-file .env torchrun --nproc-per-node=8 \
     -m predictable_scaling.main \
-    --max-tokens 100000 \
+    --max-tokens 10000000 \
     --name training-parameter-smoke \
     --tags smoke \
     --log-every 10
