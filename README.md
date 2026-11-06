@@ -15,3 +15,13 @@ Since the training datasets will be loaded from [Flock](https://flock.cerulean.w
 ```bash
 uv run flock login
 ```
+
+### Environment Variables
+
+```
+HF_TOKEN=<YOUR-HUGGINGFACE-TOKEN>
+WANDB_API_KEY=<YOUR-WANDB-KEY>
+WANDB_ENTITY=<YOUR-WANDB-PROJECT>
+
+WANDB_BASE_URL=<>   # optional
+```
