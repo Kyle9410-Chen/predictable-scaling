@@ -34,7 +34,7 @@ ulimit -u "$(ulimit -Hu)"
 uv run --frozen --env-file .env torchrun --nproc-per-node=8 \
     -m predictable_scaling.main \
     --max-tokens 10000000 \
-    --name training-parameter-smoke \
+    --name training-eval-smoke \
     --tags smoke \
     --log-every 10
 
