@@ -1,4 +1,5 @@
-from transformers import LlamaConfig, AutoModelForCausalLM
+from transformers import AutoTokenizer, LlamaConfig, AutoModelForCausalLM
+import torch.distributed as dist
 
 """
 Requested budget	Layers (L)  Hidden (d)	MLP (m)	Query heads	KV heads	Actual parameters
@@ -65,16 +66,16 @@ def build_model(attn_impl="kernels-community/flash-attn3", scale="150M", config=
         num_key_value_heads=cfg.kv_heads,
         head_dim=cfg.HEAD_DIM,
         hidden_act="silu",
-        max_position_embeddings=4096,
+        max_position_embeddings=8192,
         rms_norm_eps=1e-5,
         rope_theta=500000.0,
-        rope_scaling={
-            "rope_type": "llama3",
-            "factor": 32.0,
-            "low_freq_factor": 1.0,
-            "high_freq_factor": 4.0,
-            "original_max_position_embeddings": 8192
-        },
+        # rope_scaling={
+        #     "rope_type": "llama3",
+        #     "factor": 32.0,
+        #     "low_freq_factor": 1.0,
+        #     "high_freq_factor": 4.0,
+        #     "original_max_position_embeddings": 8192
+        # },
         tie_word_embeddings=True,
         attention_bias=False,
         mlp_bias=False,
@@ -86,6 +87,9 @@ def build_model(attn_impl="kernels-community/flash-attn3", scale="150M", config=
 
     return AutoModelForCausalLM.from_config(config, attn_implementation=attn_impl)
 
+def save_model(model, path):
+    model.module.save_pretrained(path)
+    AutoTokenizer.from_pretrained("meta-llama/Llama-3.2-1B").save_pretrained(path)
 
 if __name__ == "__main__":
     print(ModelScaleConfig().total_params())

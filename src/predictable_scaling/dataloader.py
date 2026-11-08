@@ -1,8 +1,6 @@
-import os
 import lance
 import random
 
-from lance.torch.data import LanceDataset
 from torch.utils.data import DataLoader, DistributedSampler, IterableDataset, get_worker_info
 from flock.hub import s3
 from transformers import AutoTokenizer
@@ -73,7 +71,7 @@ class Collator:
             return_tensors = "pt",
             padding=True,
             truncation=True,
-            max_length=4096
+            max_length=8192
         )
 
         ids = enc["input_ids"]
