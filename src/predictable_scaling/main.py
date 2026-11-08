@@ -8,7 +8,7 @@ from torch.nn.parallel import DistributedDataParallel
 
 from predictable_scaling.optimizer import muon
 from predictable_scaling.dataloader import load_dataset
-from predictable_scaling.model import build_model
+from predictable_scaling.model import build_model, save_model
 from predictable_scaling.train import train
 from predictable_scaling.scheduler import TokenLRScheduler, wsd_shape
 from predictable_scaling.train import LogConfig
@@ -67,6 +67,11 @@ def main():
             max_tokens=args.max_tokens, 
             log_config=LogConfig(name=args.name, log_every=args.log_every, tags=args.tags.split(","), eval_every=20)
             )
+
+        dist.barrier()
+        if dist_info.is_main:
+            save_model(model, f"models/{args.name}")
+        dist.barrier()
 
     finally:
         dist.destroy_process_group()
