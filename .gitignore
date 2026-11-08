@@ -223,4 +223,4 @@ __marimo__/
 # Training
 logs
 wandb/
-models/*.pt
+models/
