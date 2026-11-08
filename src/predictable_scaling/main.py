@@ -68,6 +68,8 @@ def main():
             log_config=LogConfig(name=args.name, log_every=args.log_every, tags=args.tags.split(","), eval_every=20)
             )
 
+        torch.save(model.state_dict(), f"{args.name}.pt")
+
     finally:
         dist.destroy_process_group()
 
