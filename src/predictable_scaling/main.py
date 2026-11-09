@@ -64,6 +64,10 @@ def main():
         shape = wsd_shape()
         scheduler = TokenLRScheduler(opt, shape, args.max_tokens)
 
+        run_config = {
+            **vars(args)
+        }
+
         train(
             model=model,
             opt=opt, 
@@ -72,7 +76,7 @@ def main():
             scheduler=scheduler,
             dist_info=dist_info, 
             max_tokens=args.max_tokens, 
-            log_config=LogConfig(name=args.name, log_every=args.log_every, tags=args.tags.split(","), eval_every=50)
+            log_config=LogConfig(name=args.name, log_every=args.log_every, tags=args.tags.split(","), eval_every=50, config=run_config)
             )
 
         dist.barrier()
