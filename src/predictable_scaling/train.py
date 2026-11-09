@@ -29,6 +29,7 @@ def train(
         eval_loader: torch.utils.data.DataLoader,
         scheduler: TokenLRScheduler,
         dist_info: DistInfo, 
+        token_per_step: int,
         max_tokens: int,
         log_config: LogConfig=None
         ):
@@ -52,7 +53,7 @@ def train(
     ema_g2 = ema_trS = None
 
     for step, batch in enumerate(train_loader, start=1):
-        batch = {k: v.to(dist_info.device, non_blocking=True) for k, v in batch.items()}
+        batch = {k: v.to(dist_info.device, non_blocking=True) if torch.is_tensor(v) else v for k, v in batch.items()}
 
         measure = step % log_config.log_every == 0
 
@@ -61,15 +62,8 @@ def train(
         # we need to take the batch loss in different device. so use no_sync
         with (model.no_sync() if measure else nullcontext()):
             with torch.autocast("cuda", dtype=torch.bfloat16):
-                loss = model(
-                    input_ids = batch["input_ids"],
-                    attention_mask = batch["attention_mask"],
-                    labels=batch["labels"]
-                ).loss
+                loss = model(**batch).loss
             loss.backward()
-
-        step_tokens = (batch["labels"][:, 1:] != -100).sum()
-        dist.all_reduce(step_tokens, op=dist.ReduceOp.SUM)
     
         # log grad norm and critical batchsize
         if step % log_config.log_every == 0:
@@ -88,8 +82,8 @@ def train(
             big_batch_grad_square = flat.float().pow(2).sum()
 
             # get the batch size in tokens
-            B_small: float = step_tokens.item() / dist_info.world_size
-            B_big: float = step_tokens.item()
+            B_small: float = token_per_step / dist_info.world_size
+            B_big: float = token_per_step
 
             # calculate gradient square and noise
             g2 = (B_big * big_batch_grad_square - B_small * small_batch_grad_square) / (B_big - B_small)
@@ -116,7 +110,7 @@ def train(
         scheduler.update(tokens_seen)
         opt.step()
 
-        tokens_seen += step_tokens.item()
+        tokens_seen += token_per_step
 
         # log loss, token_seen, lr
         if step % log_config.log_every == 0:
