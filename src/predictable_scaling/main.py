@@ -78,7 +78,7 @@ def main():
             dist_info=dist_info, 
             max_tokens=args.max_tokens, 
             token_per_step=dist_info.world_size * (args.batch_size * seq_len - 1),
-            log_config=LogConfig(name=args.name, log_every=args.log_every, tags=args.tags.split(","), eval_every=10, config=run_config)
+            log_config=LogConfig(name=args.name, log_every=args.log_every, tags=args.tags.split(","), eval_every=500, config=run_config)
             )
 
         dist.barrier()
