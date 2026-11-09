@@ -30,7 +30,7 @@ class DistInfo:
 def setup_distributed() -> DistInfo:
     local_rank = int(os.environ["LOCAL_RANK"])
     torch.cuda.set_device(local_rank)
-    dist.init_process_group("nccl")
+    dist.init_process_group("nccl", timeout=datetime.timedelta(minutes=5))
     return DistInfo(
         rank = dist.get_rank(),
         world_size = dist.get_world_size(),
@@ -49,7 +49,6 @@ def get_args():
 
 def main():
     dist_info = setup_distributed()
-    dist.init_process_group("nccl", timeout=datetime.timedelta(minutes=5)) # all reduce timeout. catch is any rank hangs
     args = get_args()
 
     try:
