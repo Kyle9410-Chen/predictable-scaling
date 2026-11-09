@@ -11,7 +11,7 @@ def cosine_shape(warmup_frac=0.0, min_ratio=0.0) -> Callable[[float], float]:
     
     return shape
 
-def wsd_shape(warmup_frac=0.0, decay_frac=0.2, min_ratio=0.0) -> Callable[[float], float]:
+def wsd_shape(warmup_frac=0.01, decay_frac=0.2, min_ratio=0.0) -> Callable[[float], float]:
     decay_start = 1 - decay_frac
 
     def shape(p: float) -> float:
