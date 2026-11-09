@@ -2,12 +2,12 @@
 #SBATCH --job-name=scaling-baseline
 #SBATCH --partition=8gpus
 #SBATCH --account=ACD115198
-#SBATCH --exclude=25a-hgpn001,25a-hgpn003,25a-hgpn004,25a-hgpn007,25a-hgpn071
+#SBATCH --exclude=25a-hgpn001,25a-hgpn003,25a-hgpn004,25a-hgpn007,25a-hgpn071,25a-hgpn083
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --gpus-per-node=8
 #SBATCH --cpus-per-task=64
-#SBATCH --time=00:20:00
+#SBATCH --time=10:00:00
 #SBATCH --output=logs/%x-%j.out
 
 set -euo pipefail
@@ -33,9 +33,13 @@ ulimit -u "$(ulimit -Hu)"
 
 uv run --frozen --env-file .env torchrun --nproc-per-node=8 \
     -m predictable_scaling.main \
-    --max-tokens 10000000 \
-    --name training-eval-smoke \
-    --tags smoke \
-    --log-every 10
+    --max-tokens 30000000000 \
+    --name 150M-adamlr-1e3-muonlr-2e2 \
+    --tags 150M \
+    --log-every 10 \
+    --batch-size 4 \
+    --adam_lr 1e-3 \
+    --muon_lr 2e-2 \
+    --wd 0.1 \
 
 echo "done: $(date)"
