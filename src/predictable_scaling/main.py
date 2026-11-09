@@ -54,11 +54,12 @@ def get_args():
 def main():
     dist_info = setup_distributed()
     args = get_args()
+    seq_len = 8192
 
     try:
         model = build_model().to(dist_info.device)
         opt = muon(model, adam_lr=args.adam_lr, muon_lr=args.muon_lr, wd=args.wd)
-        train_loader = load_dataset(dist_info.rank, dist_info.world_size, split="train", batch_size=args.batch_size)
+        train_loader = load_dataset(dist_info.rank, dist_info.world_size, split="train", batch_size=args.batch_size, seq_len=seq_len)
         eval_loader = load_dataset(dist_info.rank, dist_info.world_size, split="eval", workers=4)
         model = DistributedDataParallel(model, device_ids=[dist_info.local_rank])
         shape = wsd_shape()
@@ -76,7 +77,8 @@ def main():
             scheduler=scheduler,
             dist_info=dist_info, 
             max_tokens=args.max_tokens, 
-            log_config=LogConfig(name=args.name, log_every=args.log_every, tags=args.tags.split(","), eval_every=50, config=run_config)
+            token_per_step=dist_info.world_size * (args.batch_size * seq_len - 1),
+            log_config=LogConfig(name=args.name, log_every=args.log_every, tags=args.tags.split(","), eval_every=10, config=run_config)
             )
 
         dist.barrier()

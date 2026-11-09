@@ -1,10 +1,10 @@
 import lance
 import random
-
+import torch
 from torch.utils.data import DataLoader, DistributedSampler, IterableDataset, get_worker_info
 from flock.hub import s3
 from transformers import AutoTokenizer
-from itertools import islice
+from itertools import islice, batched
 
 class SequentialLanceDataset(IterableDataset):
     def __init__(self, uri, rank, world_size, version=1, column="text", 
@@ -60,6 +60,37 @@ class SequentialLanceDataset(IterableDataset):
         rng.shuffle(buffer)
         yield from buffer
 
+class PackedDataset(IterableDataset):
+    def __init__(self, base: SequentialLanceDataset, tokenizer, seq_len=8192, column="text", tokenize_batch=256):
+        self.base = base
+        self.tokenizer = tokenizer
+        self.seq_len = seq_len
+        self.column = column
+        self.tokenize_batch = tokenize_batch
+
+    def __iter__(self):
+        eos = self.tokenizer.eos_token_id
+        L = self.seq_len
+        buffer: list[int] = []
+        pos: list[int] = []
+        for row in batched(self.base, self.tokenize_batch):
+            enc = self.tokenizer([r[self.column] for r in row])["input_ids"]
+            for ids in enc:
+                ids.append(eos)
+                buffer.extend(ids)
+                pos.extend(range(len(ids)))
+            n_full = len(buffer) // L
+            for i in range(n_full):
+                s = slice(i * L, (i+1) * L)
+                p = torch.tensor(pos[s], dtype=torch.long)
+                start = pos[i*L]
+                if start != 0:
+                    resets = (p[1:] == 0).nonzero()
+                    end = resets[0].item() + 1 if len(resets) else L
+                    p[:end] -= start
+                yield {"input_ids": torch.tensor(buffer[s], dtype=torch.long), "position_ids": p}
+            buffer, pos = buffer[n_full*L:], pos[n_full*L:]
+
 class Collator:
     def __init__(self, tokenizer, column="text"):
         self.tokenizer = tokenizer
@@ -84,8 +115,26 @@ class Collator:
             "attention_mask": mask,
             "labels": labels
             }
-    
-def load_dataset(rank: int, world_size: int, split: str="train", workers: int=8, batch_size=4) -> DataLoader:
+
+def packed_collate(items):
+    ids = torch.cat([x["input_ids"] for x in items]).unsqueeze(0)
+    pos = torch.cat([x["position_ids"] for x in items]).unsqueeze(0)
+
+    starts = (pos[0] == 0).nonzero().flatten()
+    cu = torch.cat([starts, torch.tensor([pos.shape[1]])]).to(torch.int32)
+    max_len = int(cu.diff().max())
+
+    return {
+        "input_ids": ids,
+        "labels": ids,
+        "position_ids": pos,
+        "cu_seq_lens_q": cu,
+        "cu_seq_lens_k": cu,
+        "max_length_q": max_len,
+        "max_length_k": max_len,
+    }
+
+def load_dataset(rank: int, world_size: int, split: str="train", workers: int=8, batch_size=4, seq_len=8192) -> DataLoader:
     s3.get_process(read_only=True)
 
     tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-3.2-1B")
@@ -116,13 +165,15 @@ def load_dataset(rank: int, world_size: int, split: str="train", workers: int=8,
         )
 
     else:
-        ds = SequentialLanceDataset(
+        base = SequentialLanceDataset(
                 "s3://flock-datasets/fineweb-edu",
                 rank=rank,
                 world_size=world_size,
                 split="train"
             )
-    
+
+        ds = PackedDataset(base, tokenizer, seq_len)
+
         loader = DataLoader(
             dataset=ds,
             batch_size=batch_size,
@@ -130,7 +181,7 @@ def load_dataset(rank: int, world_size: int, split: str="train", workers: int=8,
             multiprocessing_context="spawn",
             persistent_workers=True,
             pin_memory=True,
-            collate_fn=Collator(tokenizer)
+            collate_fn=packed_collate
         )
 
     return loader
