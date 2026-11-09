@@ -1,6 +1,9 @@
 import os
 import torch
+import datetime
+import traceback
 import argparse
+import sys
 import torch.distributed as dist
 
 from dataclasses import dataclass
@@ -41,17 +44,18 @@ def get_args():
     p.add_argument("--log-every", type=int, default=10)
     p.add_argument("--name", type=str, default="training")
     p.add_argument("--tags", type=str, default="") # tag is comma seperated
-
+    p.add_argument("--batch-size", type=int, default=4) # number of sequence per device per batch
     return p.parse_args()
 
 def main():
     dist_info = setup_distributed()
+    dist.init_process_group("nccl", timeout=datetime.timedelta(minutes=5)) # all reduce timeout. catch is any rank hangs
     args = get_args()
 
     try:
         model = build_model().to(dist_info.device)
         opt = muon(model)
-        train_loader = load_dataset(dist_info.rank, dist_info.world_size, split="train")
+        train_loader = load_dataset(dist_info.rank, dist_info.world_size, split="train", batch_size=args.batch_size)
         eval_loader = load_dataset(dist_info.rank, dist_info.world_size, split="eval", workers=4)
         model = DistributedDataParallel(model, device_ids=[dist_info.local_rank])
         shape = wsd_shape()
@@ -65,7 +69,7 @@ def main():
             scheduler=scheduler,
             dist_info=dist_info, 
             max_tokens=args.max_tokens, 
-            log_config=LogConfig(name=args.name, log_every=args.log_every, tags=args.tags.split(","), eval_every=20)
+            log_config=LogConfig(name=args.name, log_every=args.log_every, tags=args.tags.split(","), eval_every=50)
             )
 
         dist.barrier()
@@ -73,8 +77,13 @@ def main():
             save_model(model, f"models/{args.name}")
         dist.barrier()
 
-    finally:
-        dist.destroy_process_group()
+    except BaseException:
+        traceback.print_exc()
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os._exit(1)
+
+    dist.destroy_process_group()
 
 if __name__ == "__main__":
     main()

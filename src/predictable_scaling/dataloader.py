@@ -85,7 +85,7 @@ class Collator:
             "labels": labels
             }
     
-def load_dataset(rank: int, world_size: int, split: str="train", workers: int=8) -> DataLoader:
+def load_dataset(rank: int, world_size: int, split: str="train", workers: int=8, batch_size=4) -> DataLoader:
     s3.get_process(read_only=True)
 
     tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-3.2-1B")
@@ -107,7 +107,7 @@ def load_dataset(rank: int, world_size: int, split: str="train", workers: int=8)
 
         return DataLoader(
             dataset=rows,
-            batch_size=4,
+            batch_size=batch_size,
             num_workers=workers,
             persistent_workers=True,
             sampler=sampler,
@@ -125,7 +125,7 @@ def load_dataset(rank: int, world_size: int, split: str="train", workers: int=8)
     
         loader = DataLoader(
             dataset=ds,
-            batch_size=4,
+            batch_size=batch_size,
             num_workers=workers,
             multiprocessing_context="spawn",
             persistent_workers=True,
