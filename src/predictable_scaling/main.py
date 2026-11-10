@@ -47,6 +47,8 @@ def get_args():
     p.add_argument("--batch-size", type=int, default=4) # number of sequence per device per batch
     p.add_argument("--adam_lr", type=float, default=1e-3)
     p.add_argument("--muon_lr", type=float, default=1e-2)
+    p.add_argument("--adam_beta1", type=float, default=0.9)
+    p.add_argument("--adam_beta2", type=float, default=0.95)
     p.add_argument("--wd", type=float, default=0.1)
     
     return p.parse_args()
@@ -58,7 +60,7 @@ def main():
 
     try:
         model = build_model().to(dist_info.device)
-        opt = muon(model, adam_lr=args.adam_lr, muon_lr=args.muon_lr, wd=args.wd)
+        opt = muon(model, adam_lr=args.adam_lr, adam_beta1=args.adam_beta1, adam_beta2=args.adam_beta2, muon_lr=args.muon_lr, wd=args.wd)
         train_loader = load_dataset(dist_info.rank, dist_info.world_size, split="train", batch_size=args.batch_size, seq_len=seq_len)
         eval_loader = load_dataset(dist_info.rank, dist_info.world_size, split="eval", workers=4)
         model = DistributedDataParallel(model, device_ids=[dist_info.local_rank])
