@@ -34,11 +34,11 @@ ulimit -u "$(ulimit -Hu)"
 uv run --frozen --env-file .env torchrun --nproc-per-node=8 \
     -m predictable_scaling.main \
     --max-tokens 30000000000 \
-    --name 150M-adamlr-1e3-muonlr-2.5e3 \
+    --name 150M-adamlr-1.2e3-muonlr-2.5e3 \
     --tags 150M \
     --log-every 10 \
     --batch-size 4 \
-    --adam_lr 1e-3 \
+    --adam_lr 1.2e-3 \
     --muon_lr 2.5e-3 \
     --wd 0.1 \
 
