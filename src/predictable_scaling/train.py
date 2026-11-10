@@ -129,6 +129,8 @@ def train(
                         "train/loss": avg_loss.item(), 
                         "train/loss_max": max_loss.item(), 
                         "train/lr": float(opt.param_groups[0]["lr"]),
+                        "train/lr_muon": float(opt.param_groups[0]["lr"]),
+                        "train/lr_adam": float(opt.param_groups[1]["lr"]),
                         "train/total_tokens_seen": tokens_seen,
                         "train/tokens_per_second": tokens_per_sec
                     }, 
