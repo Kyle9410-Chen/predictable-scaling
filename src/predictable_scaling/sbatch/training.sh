@@ -18,6 +18,7 @@ module purge
 module load cuda/13.0
 
 export HF_HOME=/work/${USER}/.cache/huggingface
+export WANDB_DIR=/work/${USER}/wandb
 export TOKENIZERS_PARALLELISM=false
 export NCCL_DEBUG=WARN
 export NCCL_SOCKET_IFNAME=lo
@@ -36,13 +37,15 @@ uv run --frozen --env-file .env torchrun --nproc-per-node=8 \
     --max-tokens 30000000000 \
     --name 150M-adamlr-1.2e3-muonlr-2.5e3 \
     --tags 150M \
-    --log-every 10 \
+    --log-every 100 \
+    --eval-every 500 \
     --batch-size 4 \
     --adam_lr 1.2e-3 \
     --adam_beta1 0.9 \
-    --adam_beta2 0.95 \
+    --adam_beta2 0.999 \
     --muon_lr 2.5e-3 \
     --wd 0.1 \
+    --save-dir "/work/${USER}/predictable-scaling/models" \
     "$@"
 
 echo "done: $(date)"
