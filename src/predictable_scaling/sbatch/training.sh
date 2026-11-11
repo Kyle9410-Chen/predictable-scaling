@@ -43,5 +43,6 @@ uv run --frozen --env-file .env torchrun --nproc-per-node=8 \
     --adam_beta2 0.95 \
     --muon_lr 2.5e-3 \
     --wd 0.1 \
+    "$@"
 
 echo "done: $(date)"
