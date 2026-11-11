@@ -50,6 +50,7 @@ def get_args():
     p.add_argument("--adam_beta1", type=float, default=0.9)
     p.add_argument("--adam_beta2", type=float, default=0.95)
     p.add_argument("--wd", type=float, default=0.1)
+    p.add_argument("--scale", type=str, default="150M")
     
     return p.parse_args()
 
@@ -59,7 +60,7 @@ def main():
     seq_len = 8192
 
     try:
-        model = build_model().to(dist_info.device)
+        model = build_model(scale=args.scale).to(dist_info.device)
         opt = muon(model, adam_lr=args.adam_lr, adam_beta1=args.adam_beta1, adam_beta2=args.adam_beta2, muon_lr=args.muon_lr, wd=args.wd)
         train_loader = load_dataset(dist_info.rank, dist_info.world_size, split="train", batch_size=args.batch_size, seq_len=seq_len)
         eval_loader = load_dataset(dist_info.rank, dist_info.world_size, split="eval", workers=4)
