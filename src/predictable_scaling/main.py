@@ -51,6 +51,7 @@ def get_args():
     p.add_argument("--adam_beta2", type=float, default=0.95)
     p.add_argument("--wd", type=float, default=0.1)
     p.add_argument("--scale", type=str, default="150M")
+    p.add_argument("--save-dir", type=str, default="models")
     
     return p.parse_args()
 
@@ -86,7 +87,7 @@ def main():
 
         dist.barrier()
         if dist_info.is_main:
-            save_model(model, f"models/{args.name}")
+            save_model(model, f"{args.save_dir}/{args.name}")
         dist.barrier()
 
     except BaseException:
