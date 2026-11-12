@@ -52,6 +52,7 @@ def get_args():
     p.add_argument("--adam_beta1", type=float, default=0.9)
     p.add_argument("--adam_beta2", type=float, default=0.95)
     p.add_argument("--wd", type=float, default=0.1)
+    p.add_argument("--adam_eps", type=float, default=1e-8)
     p.add_argument("--scale", type=str, default="150M")
     p.add_argument("--save-dir", type=str, default="models")
     p.add_argument("--profile", action="store_true")
@@ -75,7 +76,7 @@ def main():
         
         model = DistributedDataParallel(model, device_ids=[dist_info.local_rank])
 
-        opt = muon(model, adam_lr=args.adam_lr, adam_beta1=args.adam_beta1, adam_beta2=args.adam_beta2, muon_lr=args.muon_lr, wd=args.wd)
+        opt = muon(model, adam_lr=args.adam_lr, adam_beta1=args.adam_beta1, adam_beta2=args.adam_beta2, muon_lr=args.muon_lr, wd=args.wd, adam_eps=args.adam_eps)
         train_loader = load_dataset(dist_info.rank, dist_info.world_size, split="train", batch_size=args.batch_size, seq_len=seq_len)
         eval_loader = load_dataset(dist_info.rank, dist_info.world_size, split="eval", workers=4)
         shape = wsd_shape()
