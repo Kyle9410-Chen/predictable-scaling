@@ -1,5 +1,6 @@
 from transformers import AutoTokenizer, LlamaConfig, AutoModelForCausalLM
 import torch.distributed as dist
+from liger_kernel.transformers import apply_liger_kernel_to_llama
 
 """
 Requested budget	Layers (L)  Hidden (d)	MLP (m)	Query heads	KV heads	Actual parameters
@@ -84,6 +85,10 @@ def build_model(attn_impl="kernels-community/flash-attn3", scale="150M", config=
         eos_token_id=128001,
         use_cache=False,
     )
+
+    # let liger kernel handle LM head, torch compile handle the rest
+    apply_liger_kernel_to_llama(rope=False, rms_norm=False, swiglu=False,
+                            cross_entropy=False, fused_linear_cross_entropy=True)
 
     return AutoModelForCausalLM.from_config(config, attn_implementation=attn_impl)
 

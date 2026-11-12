@@ -14,13 +14,18 @@ if TYPE_CHECKING:
     from predictable_scaling.main import DistInfo
 
 class LogConfig:
-    def __init__(self, name, log_every: int=10,eval_every: int=100, tags: list[str]=["baseline"], config: dict=None):
+    def __init__(self, name, log_every: int=10,eval_every: int=100, tags: list[str]=["baseline"], config: dict=None, profile=False):
         self.project = "lab6-predictable-scaling"
         self.name = name
         self.log_every = log_every
         self.eval_every = eval_every
         self.tags = tags
         self.config = config
+        self.profile = profile
+
+def _t():
+    torch.cuda.synchronize()
+    return time.perf_counter()
 
 def train(
         model: DistributedDataParallel, 
@@ -52,21 +57,40 @@ def train(
     # critical batch size logging
     ema_g2 = ema_trS = None
 
+    if log_config.profile:
+        from collections import defaultdict
+        timing = defaultdict(float)
+        n_timed = 0
+        t_end = _t()
+
     for step, batch in enumerate(train_loader, start=1):
+        if log_config.profile:
+            t_data = _t()
+
         batch = {k: v.to(dist_info.device, non_blocking=True) if torch.is_tensor(v) else v for k, v in batch.items()}
+        torch._dynamo.mark_dynamic(batch["cu_seq_lens_q"], 0) # it change every batch. tell torch compile it is dynamic
+        torch._dynamo.mark_dynamic(batch["cu_seq_lens_k"], 0)
 
         measure = step % log_config.log_every == 0
 
         opt.zero_grad()
 
+        if log_config.profile:
+            t0 = _t()
+
         # we need to take the batch loss in different device. so use no_sync
         with (model.no_sync() if measure else nullcontext()):
             with torch.autocast("cuda", dtype=torch.bfloat16):
                 loss = model(**batch).loss
+            if log_config.profile:
+                t1 = _t()
             loss.backward()
-    
+
+        if log_config.profile:
+            t2 = _t()
+
         # log grad norm and critical batchsize
-        if step % log_config.log_every == 0:
+        if measure:
             grads = [p.grad.detach() for p in model.parameters() if p.grad is not None]
             flat = _flatten_dense_tensors(grads)
 
@@ -107,13 +131,38 @@ def train(
                         "train/B_critical_tokens_raw": B_critical_tokens_raw
                     }, step=step)
 
+        if log_config.profile:
+            t3 = _t()
+
         scheduler.update(tokens_seen)
         opt.step()
+
+        if log_config.profile:
+            t4 = _t()
+
+        if log_config.profile:
+            if step > 50 and not measure:
+                timing["data"] += t_data - t_end
+                timing["h2d"]  += t0 - t_data
+                timing["fwd"]  += t1 - t0
+                timing["bwd"]  += t2 - t1
+                timing["opt"]  += t4 - t3
+                n_timed += 1
+            if measure and step > 50:
+                timing["cbs"] += t3 - t2          # cost of one CBS measurement
+                timing["n_cbs"] += 1
+
+            if dist_info.is_main and n_timed and step % 50 == 0:
+                ms = {k: 1e3 * v / n_timed for k, v in timing.items() if k not in ("cbs", "n_cbs")}
+                cbs = 1e3 * timing["cbs"] / max(timing["n_cbs"], 1)
+                print("timing ms/step: " + "  ".join(f"{k}={v:.1f}" for k, v in ms.items())
+                    + f"  | cbs_block={cbs:.1f}ms each")
+
 
         tokens_seen += token_per_step
 
         # log loss, token_seen, lr
-        if step % log_config.log_every == 0:
+        if measure:
             avg_loss = loss.detach().clone()
             max_loss = loss.detach().clone()
             dist.all_reduce(avg_loss, op=dist.ReduceOp.AVG)
@@ -156,3 +205,6 @@ def train(
 
         if tokens_seen >= max_tokens:
             break
+
+        if log_config.profile:
+            t_end = _t()

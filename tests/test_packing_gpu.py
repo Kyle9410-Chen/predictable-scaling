@@ -12,6 +12,9 @@ from predictable_scaling.dataloader import packed_collate
 
 torch.manual_seed(0)
 model = build_model().cuda().eval()
+for layer in model.model.layers:
+    layer.compile()
+    
 body = model.model                      # LlamaModel: skip lm_head / Liger loss
 
 A = torch.randint(10, 100_000, (300,))

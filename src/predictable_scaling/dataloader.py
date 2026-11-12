@@ -123,6 +123,7 @@ def packed_collate(items):
     starts = (pos[0] == 0).nonzero().flatten()
     cu = torch.cat([starts, torch.tensor([pos.shape[1]])]).to(torch.int32)
     max_len = int(cu.diff().max())
+    max_len = 1 << (max_len-1).bit_length() # round up to power of 2, make the kernel compile friendly
 
     return {
         "input_ids": ids,

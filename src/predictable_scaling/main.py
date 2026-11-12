@@ -4,6 +4,7 @@ import datetime
 import traceback
 import argparse
 import sys
+import logging
 import torch.distributed as dist
 
 from dataclasses import dataclass
@@ -42,17 +43,22 @@ def get_args():
     p = argparse.ArgumentParser()
     p.add_argument("--max-tokens", type=int, default=30e9)
     p.add_argument("--log-every", type=int, default=10)
+    p.add_argument("--eval-every", type=int, default=500)
     p.add_argument("--name", type=str, default="training")
     p.add_argument("--tags", type=str, default="") # tag is comma seperated
     p.add_argument("--batch-size", type=int, default=4) # number of sequence per device per batch
     p.add_argument("--opt", type=str, default="muon")
-    p.add_argument("--adam_lr", type=float, default=1e-3)
-    p.add_argument("--muon_lr", type=float, default=1e-2)
     p.add_argument("--soap_lr", type=float, default=3e-3)
+    p.add_argument("--muon_lr", type=float, default=2.5e-3)
+    p.add_argument("--muon_momentum", type=float, default=0.95)
+    p.add_argument("--adam_lr", type=float, default=1.2e-3)
     p.add_argument("--adam_beta1", type=float, default=0.9)
-    p.add_argument("--adam_beta2", type=float, default=0.95)
+    p.add_argument("--adam_beta2", type=float, default=0.999)
     p.add_argument("--wd", type=float, default=0.1)
+    p.add_argument("--adam_eps", type=float, default=1e-8)
     p.add_argument("--scale", type=str, default="150M")
+    p.add_argument("--save-dir", type=str, default="models")
+    p.add_argument("--profile", action="store_true")
     
     return p.parse_args()
 
@@ -63,20 +69,25 @@ def main():
 
     try:
         model = build_model(scale=args.scale).to(dist_info.device)
+
+        torch._dynamo.config.ignore_logging_functions.add(logging.Logger.warning_once)
+        # raise the recompile limit, since the default 8 is less than the layers required by llama
+        torch._dynamo.config.recompile_limit = 64
+        torch._dynamo.config.accumulated_recompile_limit = 512
+        for layer in model.model.layers:
+            layer.compile()
         
-        # optimizer
-        muon_opt = muon(model, adam_lr=args.adam_lr, adam_beta1=args.adam_beta1, adam_beta2=args.adam_beta2, muon_lr=args.muon_lr, wd=args.wd)
+        model = DistributedDataParallel(model, device_ids=[dist_info.local_rank])
+
+        muon_opt = muon(model, adam_lr=args.adam_lr, adam_beta1=args.adam_beta1, adam_beta2=args.adam_beta2, muon_lr=args.muon_lr, muon_momentum=args.muon_momentum, wd=args.wd, adam_eps=args.adam_eps)
         soap_opt = soap(model, lr=args.soap_lr)
         opt_dict = {
             "muon": muon_opt,
             "soap": soap_opt
         }
 
-        # loader
         train_loader = load_dataset(dist_info.rank, dist_info.world_size, split="train", batch_size=args.batch_size, seq_len=seq_len)
         eval_loader = load_dataset(dist_info.rank, dist_info.world_size, split="eval", workers=4)
-        
-        model = DistributedDataParallel(model, device_ids=[dist_info.local_rank])
         shape = wsd_shape()
         scheduler = TokenLRScheduler(opt_dict[args.opt], shape, args.max_tokens)
 
@@ -93,12 +104,19 @@ def main():
             dist_info=dist_info, 
             max_tokens=args.max_tokens, 
             token_per_step=dist_info.world_size * (args.batch_size * seq_len - 1),
-            log_config=LogConfig(name=args.name, log_every=args.log_every, tags=args.tags.split(","), eval_every=500, config=run_config)
+            log_config=LogConfig(
+                name=args.name, 
+                log_every=args.log_every,
+                tags=args.tags.split(","), 
+                eval_every=args.eval_every, 
+                config=run_config,
+                profile=args.profile
+                )
             )
 
         dist.barrier()
         if dist_info.is_main:
-            save_model(model, f"models/{args.name}")
+            save_model(model, f"{args.save_dir}/{args.name}")
         dist.barrier()
 
     except BaseException:
