@@ -53,6 +53,9 @@ def get_args():
     p.add_argument("--adam_lr", type=float, default=1.2e-3)
     p.add_argument("--adam_beta1", type=float, default=0.9)
     p.add_argument("--adam_beta2", type=float, default=0.999)
+    p.add_argument("--tailema-start", type=int)
+    p.add_argument("--tailema-tau", type=int)
+    p.add_argument("--tailema-lambda", type=float)
     p.add_argument("--wd", type=float, default=0.1)
     p.add_argument("--adam_eps", type=float, default=1e-8)
     p.add_argument("--scale", type=str, default="150M")
@@ -115,6 +118,11 @@ def main():
             ckpt_at = sorted(int(float(x)) for x in args.ckpt_at.split(","))
             ckpt_config = CkptConfig(ckpt_at=ckpt_at, save_dir=save_dir)
 
+        # guard tail ema setting has to be all set or all un set
+        given = [args.tailema_start is not None, args.tailema_tau is not None, args.tailema_lambda is not None]
+        if any(given) and not all(given):
+            raise ValueError(f"Tail EMA args incomplete. Got --tailema-start={args.tailema_start}, --tailema-tau={args.tailema_tau}, --tailema-lambda={args.tailema_lambda}")
+
         train(
             model=model,
             opt=opt, 
@@ -124,6 +132,9 @@ def main():
             dist_info=dist_info, 
             max_tokens=max_tokens, 
             token_per_step=dist_info.world_size * (args.batch_size * seq_len - 1),
+            tailema_start=args.tailema_start,
+            tailema_tau=args.tailema_tau,
+            tailema_lambda=args.tailema_lambda,
             log_config=LogConfig(
                 name=args.name, 
                 log_every=args.log_every,

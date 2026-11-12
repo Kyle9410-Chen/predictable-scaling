@@ -49,6 +49,9 @@ def train(
         dist_info: DistInfo, 
         token_per_step: int,
         max_tokens: int,
+        tailema_start: int,
+        tailema_tau: int,
+        tailema_lambda: float,
         log_config: LogConfig=None,
         ckpt_config: CkptConfig=None,
         branch_config: BranchConfig=None,
@@ -83,6 +86,8 @@ def train(
     else:
         next_roll = None
     pending_at = [t for t in ckpt_config.ckpt_at if t > tokens_seen] if ckpt_config else []
+
+    tailema = None   # Tail-EMA buffer: one fp32 tensor per non-embedding parameter, from TAILEMA_START
 
     if log_config.profile:
         from collections import defaultdict
@@ -239,6 +244,16 @@ def train(
                 )
                 print(f"step={step} tokens={tokens_seen:,} loss={avg_loss.item():.4f} loss_max={max_loss.item():.4f}")
 
+        # tail-ema update
+        if tailema_start is not None and step >= tailema_start:
+            with torch.no_grad():
+                if tailema is None:
+                    embed = model.module.get_input_embeddings().weight
+                    tail_src = [p for p in model.parameters() if p is not embed] # live parameters buffer
+                    tailema = [p.detach().float().clone() for p in tail_src]
+                else:
+                    torch._foreach_lerp_(tailema, tail_src, 1.0 / tailema_tau)
+    
         # evaluation
         if step % log_config.eval_every == 0:
             eval_start = time.perf_counter()
@@ -260,3 +275,19 @@ def train(
 
         if log_config.profile:
             t_end = _t()
+
+    # tail ema readout
+    if tailema is not None:
+        with torch.no_grad():
+            for e, p in zip(tailema, tail_src):
+                if e is not None:
+                    p.copy_(((1.0 - tailema_lambda) * p.float() + tailema_lambda * e).to(p.dtype))
+
+        eval_loss = eval(model, eval_loader, dist_info)
+        if dist_info.is_main:
+            wandb.log(
+                {
+                    "eval/loss_tailEMA": eval_loss,
+                },
+                step=step
+            )
