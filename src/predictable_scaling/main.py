@@ -47,11 +47,11 @@ def get_args():
     p.add_argument("--name", type=str, default="training")
     p.add_argument("--tags", type=str, default="") # tag is comma seperated
     p.add_argument("--batch-size", type=int, default=4) # number of sequence per device per batch
-    p.add_argument("--muon_lr", type=float, default=1e-2)
+    p.add_argument("--muon_lr", type=float, default=2.5e-3)
     p.add_argument("--muon_momentum", type=float, default=0.95)
-    p.add_argument("--adam_lr", type=float, default=1e-3)
+    p.add_argument("--adam_lr", type=float, default=1.2e-3)
     p.add_argument("--adam_beta1", type=float, default=0.9)
-    p.add_argument("--adam_beta2", type=float, default=0.95)
+    p.add_argument("--adam_beta2", type=float, default=0.999)
     p.add_argument("--wd", type=float, default=0.1)
     p.add_argument("--adam_eps", type=float, default=1e-8)
     p.add_argument("--scale", type=str, default="150M")
