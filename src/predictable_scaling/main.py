@@ -9,7 +9,7 @@ import torch.distributed as dist
 from dataclasses import dataclass
 from torch.nn.parallel import DistributedDataParallel
 
-from predictable_scaling.optimizer import muon
+from predictable_scaling.optimizer import muon, soap
 from predictable_scaling.dataloader import load_dataset
 from predictable_scaling.model import build_model, save_model
 from predictable_scaling.train import train
@@ -45,8 +45,10 @@ def get_args():
     p.add_argument("--name", type=str, default="training")
     p.add_argument("--tags", type=str, default="") # tag is comma seperated
     p.add_argument("--batch-size", type=int, default=4) # number of sequence per device per batch
+    p.add_argument("--opt", type=str, default="muon")
     p.add_argument("--adam_lr", type=float, default=1e-3)
     p.add_argument("--muon_lr", type=float, default=1e-2)
+    p.add_argument("--soap_lr", type=float, default=3e-3)
     p.add_argument("--adam_beta1", type=float, default=0.9)
     p.add_argument("--adam_beta2", type=float, default=0.95)
     p.add_argument("--wd", type=float, default=0.1)
@@ -61,12 +63,22 @@ def main():
 
     try:
         model = build_model(scale=args.scale).to(dist_info.device)
-        opt = muon(model, adam_lr=args.adam_lr, adam_beta1=args.adam_beta1, adam_beta2=args.adam_beta2, muon_lr=args.muon_lr, wd=args.wd)
+        
+        # optimizer
+        muon_opt = muon(model, adam_lr=args.adam_lr, adam_beta1=args.adam_beta1, adam_beta2=args.adam_beta2, muon_lr=args.muon_lr, wd=args.wd)
+        soap_opt = soap(model, lr=args.soap_lr)
+        opt_dict = {
+            "muon": muon_opt,
+            "soap": soap_opt
+        }
+
+        # loader
         train_loader = load_dataset(dist_info.rank, dist_info.world_size, split="train", batch_size=args.batch_size, seq_len=seq_len)
         eval_loader = load_dataset(dist_info.rank, dist_info.world_size, split="eval", workers=4)
+        
         model = DistributedDataParallel(model, device_ids=[dist_info.local_rank])
         shape = wsd_shape()
-        scheduler = TokenLRScheduler(opt, shape, args.max_tokens)
+        scheduler = TokenLRScheduler(opt_dict[args.opt], shape, args.max_tokens)
 
         run_config = {
             **vars(args)
@@ -74,7 +86,7 @@ def main():
 
         train(
             model=model,
-            opt=opt, 
+            opt=opt_dict[args.opt], 
             train_loader=train_loader, 
             eval_loader=eval_loader, 
             scheduler=scheduler,

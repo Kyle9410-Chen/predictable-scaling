@@ -33,15 +33,17 @@ ulimit -u "$(ulimit -Hu)"
 
 uv run --frozen --env-file .env torchrun --nproc-per-node=8 \
     -m predictable_scaling.main \
-    --max-tokens 30000000000 \
-    --name 150M-adamlr-1.2e3-muonlr-2.5e3 \
-    --tags 150M \
+    --max-tokens 30000000 \
+    --name soap-smoke \
+    --tags smoke \
     --log-every 10 \
-    --batch-size 4 \
+    --batch-size 8 \
+    --opt soap \
     --adam_lr 1.2e-3 \
     --adam_beta1 0.9 \
     --adam_beta2 0.95 \
     --muon_lr 2.5e-3 \
+    --soap_lr 3e-3 \
     --wd 0.1 \
     "$@"
 
