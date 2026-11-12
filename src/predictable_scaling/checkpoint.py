@@ -1,3 +1,43 @@
+"""Checkpoint save/load for WSD branching.
+
+On-disk layout
+--------------
+A run's directory is ``{--save-dir}/{--name}``. It holds both the final
+HF model (written by ``save_model`` at the end) and the checkpoints::
+
+    {save_dir}/{name}/
+    ├── config.json, model.safetensors, tokenizer*.json  # final model (save_model)
+    ├── tok_<tokens_seen>/                                # one checkpoint
+    │   ├── model.pt          # model.module.state_dict(); written by rank 0
+    │   ├── train_state.pt    # JSON (despite the .pt suffix); written by rank 0:
+    │   │                     #   step, tokens_seen, ema_g2, ema_trS, wandb_id, world_size
+    │   ├── rank<r>.pt        # one per rank r = 0..world_size-1:
+    │   │                     #   {"opt": opt.state_dict(),   # this rank's DistributedMuon shard
+    │   │                     #    "data": {shard: frag}}     # this rank's workers' data position
+    │   └── KEEP              # empty marker: a --ckpt-at checkpoint; never pruned
+    └── tok_<tokens_seen>.tmp/                            # in-progress save; renamed when complete
+
+Naming
+------
+- ``tok_<N>``: N is the exact ``tokens_seen`` when the checkpoint was saved. Saves
+  happen on step boundaries, so N is slightly above the ``--ckpt-at`` target
+  (e.g. ``--ckpt-at 8e9`` gives ``tok_8000256000``). Use ``ls`` to get the real name.
+- ``.tmp`` suffix: a save that hasn't finished, or one that crashed partway.
+  Ignored by ``latest_checkpoint`` and ``prune_checkpoints``; safe to delete.
+- ``KEEP``: present only on ``--ckpt-at`` checkpoints. Rolling checkpoints
+  (``ckpt_every``) have no marker and are pruned to the last ``keep_last``.
+
+Restore requirements
+--------------------
+- Same world size (asserted on load): DistributedMuon's owner map and the
+  per-rank optimizer files depend on it.
+- Same number of DataLoader workers per rank: shard ids in ``"data"`` are
+  ``rank * num_workers + worker_id``.
+- Same model scale.
+- Optimizer *state* comes from the checkpoint; *hyperparameters* (lr, betas,
+  eps, momentum, wd) come from the current command-line args.
+"""
+
 import shutil
 import os
 import glob
