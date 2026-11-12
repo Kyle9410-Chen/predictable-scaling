@@ -17,7 +17,7 @@ def wsd_shape(warmup_frac=0.01, decay_frac=0.2, min_ratio=0.0) -> Callable[[floa
     def shape(p: float) -> float:
         if p < warmup_frac:
             return p / warmup_frac
-        if p < decay_start:
+        if decay_frac == 0 or p < decay_start:
             return 1.0
         return 1 - (1 - min_ratio) * (p - decay_start) / decay_frac
     

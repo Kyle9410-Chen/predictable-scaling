@@ -8,7 +8,8 @@ from itertools import islice, batched
 
 class SequentialLanceDataset(IterableDataset):
     def __init__(self, uri, rank, world_size, version=1, column="text", 
-                 buffer_size=4096, seed=0, read_batch_size=256, split="train", num_eval_fragment=2, eval_rows=2048):
+                 buffer_size=4096, seed=0, read_batch_size=256, split="train", 
+                 num_eval_fragment=2, eval_rows=2048, skip: dict[int, int] | None = None):
         if split not in ("train", "eval"):
             raise ValueError("split must be train or eval")
         
@@ -23,6 +24,7 @@ class SequentialLanceDataset(IterableDataset):
         self.split: str = split
         self.num_eval_fragment: int = num_eval_fragment
         self.eval_rows: int = eval_rows
+        self.skip = skip # a dictionary of [shard: how many fragment to skip]
 
     def _read(self, fragments):
         for fragment in fragments:
@@ -35,7 +37,12 @@ class SequentialLanceDataset(IterableDataset):
         random.Random(self.seed).shuffle(fragments)
 
         if self.split == "train":
-            yield from self._read(fragments[self.num_eval_fragment:][shard::num_shards])
+            frags = fragments[self.num_eval_fragment:][shard::num_shards]
+            start = (self.skip or {}).get(shard, 0)
+            for i in range(start, len(frags)):
+                for row in self._read([frags[i]]):
+                    row["_frag"] = i # make sure the index keep on after skip
+                    yield row
         elif self.split == "eval":
             # num_eval_fragment may be smaller than number of workers. so we slice by rows to ensure each worker gets some.
             # and limit the number of total rows for evaluation. make sure total row same when scaling.
@@ -49,16 +56,21 @@ class SequentialLanceDataset(IterableDataset):
         worker_id, num_workers = (info.id, info.num_workers) if info else (0, 1)
         shard = self.rank * num_workers + worker_id
         rng = random.Random(self.seed + shard + 1)
-        buffer = []
+        buffer, cur = [], 0
         for row in self._rows(shard, self.world_size * num_workers):
+            cur = row.get("_frag", 0)
             if len(buffer) < self.buffer_size:
                 buffer.append(row)
                 continue
             j = rng.randrange(self.buffer_size)
-            yield buffer[j]
+            out = buffer[j]
+            out["_shard"], out["_pos"] = shard, cur
+            yield out
             buffer[j] = row
         rng.shuffle(buffer)
-        yield from buffer
+        for out in buffer:
+            out["_shard"], out["_pos"] = shard, cur
+            yield out
 
 class PackedDataset(IterableDataset):
     def __init__(self, base: SequentialLanceDataset, tokenizer, seq_len=8192, column="text", tokenize_batch=256):
@@ -74,6 +86,7 @@ class PackedDataset(IterableDataset):
         buffer: list[int] = []
         pos: list[int] = []
         for row in batched(self.base, self.tokenize_batch):
+            shard, frag = row[-1]["_shard"], row[-1]["_pos"]
             enc = self.tokenizer([r[self.column] for r in row])["input_ids"]
             for ids in enc:
                 ids.append(eos)
@@ -88,7 +101,7 @@ class PackedDataset(IterableDataset):
                     resets = (p[1:] == 0).nonzero()
                     end = resets[0].item() + 1 if len(resets) else L
                     p[:end] -= start
-                yield {"input_ids": torch.tensor(buffer[s], dtype=torch.long), "position_ids": p}
+                yield {"input_ids": torch.tensor(buffer[s], dtype=torch.long), "position_ids": p, "shard": shard, "frag": frag}
             buffer, pos = buffer[n_full*L:], pos[n_full*L:]
 
 class Collator:
@@ -133,9 +146,10 @@ def packed_collate(items):
         "cu_seq_lens_k": cu,
         "max_length_q": max_len,
         "max_length_k": max_len,
+        "data_pos": (items[-1]["shard"], items[-1]["frag"]) # supply the information to training loop for saving data progress when creating checkpoints
     }
 
-def load_dataset(rank: int, world_size: int, split: str="train", workers: int=8, batch_size=4, seq_len=8192) -> DataLoader:
+def load_dataset(rank: int, world_size: int, split: str="train", workers: int=8, batch_size=4, seq_len=8192, skip: dict[int, int] = None) -> DataLoader:
     s3.get_process(read_only=True)
 
     tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-3.2-1B")
@@ -170,7 +184,8 @@ def load_dataset(rank: int, world_size: int, split: str="train", workers: int=8,
                 "s3://flock-datasets/fineweb-edu",
                 rank=rank,
                 world_size=world_size,
-                split="train"
+                split="train",
+                skip=skip
             )
 
         ds = PackedDataset(base, tokenizer, seq_len)
