@@ -47,8 +47,9 @@ def get_args():
     p.add_argument("--name", type=str, default="training")
     p.add_argument("--tags", type=str, default="") # tag is comma seperated
     p.add_argument("--batch-size", type=int, default=4) # number of sequence per device per batch
-    p.add_argument("--adam_lr", type=float, default=1e-3)
     p.add_argument("--muon_lr", type=float, default=1e-2)
+    p.add_argument("--muon_momentum", type=float, default=0.95)
+    p.add_argument("--adam_lr", type=float, default=1e-3)
     p.add_argument("--adam_beta1", type=float, default=0.9)
     p.add_argument("--adam_beta2", type=float, default=0.95)
     p.add_argument("--wd", type=float, default=0.1)
@@ -76,7 +77,7 @@ def main():
         
         model = DistributedDataParallel(model, device_ids=[dist_info.local_rank])
 
-        opt = muon(model, adam_lr=args.adam_lr, adam_beta1=args.adam_beta1, adam_beta2=args.adam_beta2, muon_lr=args.muon_lr, wd=args.wd, adam_eps=args.adam_eps)
+        opt = muon(model, adam_lr=args.adam_lr, adam_beta1=args.adam_beta1, adam_beta2=args.adam_beta2, muon_lr=args.muon_lr, muon_momentum=args.muon_momentum, wd=args.wd, adam_eps=args.adam_eps)
         train_loader = load_dataset(dist_info.rank, dist_info.world_size, split="train", batch_size=args.batch_size, seq_len=seq_len)
         eval_loader = load_dataset(dist_info.rank, dist_info.world_size, split="eval", workers=4)
         shape = wsd_shape()

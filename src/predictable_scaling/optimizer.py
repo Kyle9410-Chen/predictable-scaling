@@ -53,10 +53,10 @@ class DistributedMuon(Muon):
             else:
                 p.grad.detach().zero_()
 
-def muon(model: AutoModelForCausalLM, adam_lr=1e-3, adam_beta1=0.9,adam_beta2=0.95, muon_lr=1e-2, wd=0.1) -> Muon:
+def muon(model: AutoModelForCausalLM, adam_lr=1e-3, adam_beta1=0.9,adam_beta2=0.95, muon_lr=1e-2, muon_momentum=0.95, wd=0.1, adam_eps=1e-8) -> Muon:
     muon_params = [p for n, p in model.named_parameters() if p.ndim >= 2 and "embed" not in n]
     adam_params = [p for n, p in model.named_parameters() if p.ndim < 2 or "embed" in n]
 
-    optimizer = DistributedMuon(muon_params, adam_params, muon_lr=muon_lr, adam_lr=adam_lr, adam_betas=(adam_beta1, adam_beta2), wd=wd)
+    optimizer = DistributedMuon(muon_params, adam_params, muon_lr=muon_lr, momentum=muon_momentum, adam_lr=adam_lr, adam_betas=(adam_beta1, adam_beta2), wd=wd, adam_eps=adam_eps)
 
     return optimizer
