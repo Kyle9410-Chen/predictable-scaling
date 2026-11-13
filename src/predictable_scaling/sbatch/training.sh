@@ -35,7 +35,7 @@ ulimit -u "$(ulimit -Hu)"
 uv run --frozen --env-file .env torchrun --nproc-per-node=8 \
     -m predictable_scaling.main \
     --max-tokens 30000000000 \
-    --name 150M-adamlr-1.2e3-muonlr-2.5e3 \
+    --name 150M-no-warmup \
     --tags 150M \
     --log-every 100 \
     --eval-every 500 \
@@ -43,6 +43,8 @@ uv run --frozen --env-file .env torchrun --nproc-per-node=8 \
     --adam_lr 1.2e-3 \
     --adam_beta1 0.9 \
     --adam_beta2 0.999 \
+    --adam-warmup-frac 0.01 \
+    --muon-warmup-frac 0.0 \
     --muon_lr 2.5e-3 \
     --wd 0.1 \
     --save-dir "/work/${USER}/predictable-scaling/models" \

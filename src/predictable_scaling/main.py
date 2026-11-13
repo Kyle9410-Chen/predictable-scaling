@@ -48,6 +48,8 @@ def get_args():
     p.add_argument("--tags", type=str, default="") # tag is comma seperated
     p.add_argument("--batch-size", type=int, default=4) # number of sequence per device per batch
     p.add_argument("--decay-frac", type=float, default=0.2)
+    p.add_argument("--muon-warmup-frac", type=float, default=0.01)
+    p.add_argument("--adam-warmup-frac", type=float, default=0.01)
     p.add_argument("--muon_lr", type=float, default=2.5e-3)
     p.add_argument("--muon_momentum", type=float, default=0.95)
     p.add_argument("--adam_lr", type=float, default=1.2e-3)
@@ -96,8 +98,9 @@ def main():
 
         train_loader = load_dataset(dist_info.rank, dist_info.world_size, split="train", batch_size=args.batch_size, seq_len=seq_len, skip=skip)
         eval_loader = load_dataset(dist_info.rank, dist_info.world_size, split="eval", workers=4)
-        shape = wsd_shape(decay_frac=args.decay_frac)
-        scheduler = TokenLRScheduler(opt, shape, max_tokens)
+        shape_adam = wsd_shape(warmup_frac=args.adam_warmup_frac, decay_frac=args.decay_frac)
+        shape_muon = wsd_shape(warmup_frac=args.muon_warmup_frac, decay_frac=args.decay_frac)
+        scheduler = TokenLRScheduler(opt, max_tokens, shapes=[shape_muon, shape_adam]) # base on how optimizer is built, group 0 is muon, group 1 is adamw
 
         run_config = {
             **vars(args)

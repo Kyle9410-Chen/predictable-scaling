@@ -24,17 +24,26 @@ def wsd_shape(warmup_frac=0.01, decay_frac=0.2, min_ratio=0.0) -> Callable[[floa
     return shape
 
 class TokenLRScheduler:
-    def __init__(self, opt, shape, max_tokens: int):
+    def __init__(self, opt, max_tokens: int, shape = None, shapes: list = []): # shapes will be applied according to the order of param groups
         self.opt = opt
-        self.shape = shape
-        self.max_tokens = max_tokens
         self.base_lrs = [float(g["lr"]) for g in opt.param_groups]
-    
+        self.max_tokens = max_tokens
+
+        self.shapes = []
+        if shapes:
+            if len(shapes) != len(opt.param_groups):
+                raise ValueError(f"got {len(shapes)} shapes for {len(opt.param_groups)} param groups")
+            self.shapes = list(shapes)
+        elif shape is not None:
+            self.shapes = [shape] * len(opt.param_groups)
+        else:
+            raise ValueError("No shape provided")
 
     def update(self, tokens_seen: int) -> None:
-        ratio = self.shape(min(tokens_seen / self.max_tokens, 1.0))
-        for group, base in zip(self.opt.param_groups, self.base_lrs):
+        p = min(tokens_seen / self.max_tokens, 1.0)
+        for group, base, shape in zip(self.opt.param_groups, self.base_lrs, self.shapes):
+            lr = base * shape(p)
             if torch.is_tensor(group["lr"]):
-                group["lr"].fill_(base * ratio)
+                group["lr"].fill_(lr)
             else:
-                group["lr"] = base * ratio
+                group["lr"] = lr
