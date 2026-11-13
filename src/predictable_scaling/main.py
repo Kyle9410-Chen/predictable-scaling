@@ -47,6 +47,7 @@ def get_args():
     p.add_argument("--name", type=str, default="training")
     p.add_argument("--tags", type=str, default="") # tag is comma seperated
     p.add_argument("--batch-size", type=int, default=4) # number of sequence per device per batch
+    p.add_argument("--batch-accum", type=int, default=1)
     p.add_argument("--decay-frac", type=float, default=0.2)
     p.add_argument("--muon_lr", type=float, default=2.5e-3)
     p.add_argument("--muon_momentum", type=float, default=0.95)
@@ -129,7 +130,8 @@ def main():
             scheduler=scheduler,
             dist_info=dist_info, 
             max_tokens=max_tokens, 
-            token_per_step=dist_info.world_size * (args.batch_size * seq_len - 1),
+            token_per_step=dist_info.world_size * args.batch_accum * (args.batch_size * seq_len - 1),
+            batch_accumulation=args.batch_accum,
             log_config=LogConfig(
                 name=args.name, 
                 log_every=args.log_every,

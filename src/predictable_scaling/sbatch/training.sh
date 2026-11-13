@@ -2,7 +2,7 @@
 #SBATCH --job-name=scaling-baseline
 #SBATCH --partition=8gpus
 #SBATCH --account=ACD115198
-#SBATCH --exclude=25a-hgpn001,25a-hgpn003,25a-hgpn004,25a-hgpn007,25a-hgpn071,25a-hgpn083,25a-hgpn141,25a-hgpn167
+#SBATCH --exclude=25a-hgpn001,25a-hgpn003,25a-hgpn004,25a-hgpn007,25a-hgpn009,25a-hgpn071,25a-hgpn083,25a-hgpn141,25a-hgpn167
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --gpus-per-node=8

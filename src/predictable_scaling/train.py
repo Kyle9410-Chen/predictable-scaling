@@ -10,6 +10,7 @@ from predictable_scaling.eval import eval
 from predictable_scaling.checkpoint import save_checkpoint, prune_checkpoints
 from torch._utils import _flatten_dense_tensors, _unflatten_dense_tensors
 from contextlib import nullcontext
+from itertools import batched
 
 if TYPE_CHECKING:
     from predictable_scaling.main import DistInfo
@@ -49,6 +50,7 @@ def train(
         dist_info: DistInfo, 
         token_per_step: int,
         max_tokens: int,
+        batch_accumulation: int=1,
         log_config: LogConfig=None,
         ckpt_config: CkptConfig=None,
         branch_config: BranchConfig=None,
@@ -90,32 +92,39 @@ def train(
         n_timed = 0
         t_end = _t()
 
-    for step, batch in enumerate(train_loader, start=step0 + 1):
+    for step, micro_batch in enumerate(batched(train_loader, batch_accumulation), start=step0 + 1):
         if log_config.profile:
             t_data = _t()
 
         # update progress for this shard
-        shard, frag = batch.pop("data_pos")
+        shard, frag = micro_batch[-1]["data_pos"]
         progress[shard] = frag
 
-        batch = {k: v.to(dist_info.device, non_blocking=True) if torch.is_tensor(v) else v for k, v in batch.items()}
-        torch._dynamo.mark_dynamic(batch["cu_seq_lens_q"], 0) # it change every batch. tell torch compile it is dynamic
-        torch._dynamo.mark_dynamic(batch["cu_seq_lens_k"], 0)
-
         measure = step % log_config.log_every == 0
-
         opt.zero_grad()
+        loss_sum = 0.0
 
         if log_config.profile:
             t0 = _t()
 
-        # we need to take the batch loss in different device. so use no_sync
-        with (model.no_sync() if measure else nullcontext()):
-            with torch.autocast("cuda", dtype=torch.bfloat16):
-                loss = model(**batch).loss
-            if log_config.profile:
-                t1 = _t()
-            loss.backward()
+        for i, batch in enumerate(micro_batch):
+            batch.pop("data_pos")
+            batch = {k: v.to(dist_info.device, non_blocking=True) if torch.is_tensor(v) else v for k, v in batch.items()}
+            torch._dynamo.mark_dynamic(batch["cu_seq_lens_q"], 0) # it change every batch. tell torch compile it is dynamic
+            torch._dynamo.mark_dynamic(batch["cu_seq_lens_k"], 0)
+
+            last = i == len(micro_batch) - 1
+            sync = last and not measure # measure steps do the all reduce
+
+            with (nullcontext() if sync else model.no_sync()):
+                with torch.autocast("cuda", dtype=torch.bfloat16):
+                    loss = model(**batch).loss / batch_accumulation
+                if log_config.profile:
+                    t1 = _t()
+                loss.backward()
+            loss_sum += loss.detach()
+
+        loss = loss_sum # mean loss over the full batch, for logging
 
         if log_config.profile:
             t2 = _t()
