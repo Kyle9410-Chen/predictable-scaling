@@ -278,16 +278,27 @@ def train(
 
     # tail ema readout
     if tailema is not None:
+        raw = [p.detach().clone() for p in tail_src]
         with torch.no_grad():
-            for e, p in zip(tailema, tail_src):
-                if e is not None:
-                    p.copy_(((1.0 - tailema_lambda) * p.float() + tailema_lambda * e).to(p.dtype))
+            for lam in (0.25, 0.5, 0.75, 1.0):
+                for e, p, r in zip(tailema, tail_src, raw):
+                    p.copy_(((1 - lam) * r.float() + lam * e).to(p.dtype))
+                loss_lam = eval(model, eval_loader, dist_info)
+                if dist_info.is_main:
+                    wandb.log({f"eval/loss_tailEMA_l{lam}": loss_lam}, step=step)
+            for r, p in zip(raw, tail_src):   # restore raw weights before saving
+                p.copy_(r)
 
-        eval_loss = eval(model, eval_loader, dist_info)
-        if dist_info.is_main:
-            wandb.log(
-                {
-                    "eval/loss_tailEMA": eval_loss,
-                },
-                step=step
-            )
+        # with torch.no_grad():
+        #     for e, p in zip(tailema, tail_src):
+        #         if e is not None:
+        #             p.copy_(((1.0 - tailema_lambda) * p.float() + tailema_lambda * e).to(p.dtype))
+
+        # eval_loss = eval(model, eval_loader, dist_info)
+        # if dist_info.is_main:
+        #     wandb.log(
+        #         {
+        #             "eval/loss_tailEMA": eval_loss,
+        #         },
+        #         step=step
+        #     )

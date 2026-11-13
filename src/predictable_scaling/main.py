@@ -53,7 +53,7 @@ def get_args():
     p.add_argument("--adam_lr", type=float, default=1.2e-3)
     p.add_argument("--adam_beta1", type=float, default=0.9)
     p.add_argument("--adam_beta2", type=float, default=0.999)
-    p.add_argument("--tailema-start", type=int)
+    p.add_argument("--tailema-start", type=int) # the step to start tail ema
     p.add_argument("--tailema-tau", type=int)
     p.add_argument("--tailema-lambda", type=float)
     p.add_argument("--wd", type=float, default=0.1)
