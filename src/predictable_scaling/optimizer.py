@@ -8,10 +8,14 @@ class DistributedMuon(Muon):
     broadcasts the updated weights. Same result as plain Muon under DDP
     (grads are already averaged), with ~1/world_size of the optimizer compute."""
 
-    def __init__(self, muon_params, adam_params, *, muon_lr, adam_lr, adam_betas, wd, **kwargs):
+    def __init__(self, muon_params, adam_params, *, muon_lr, adam_lr, adam_betas, wd, muon_wd=None, adam_wd=None, **kwargs):
         dist_on = dist.is_available() and dist.is_initialized()
         rank = dist.get_rank() if dist_on else 0
         world = dist.get_world_size() if dist_on else 1
+
+        # if not set, use wd 
+        muon_wd = wd if muon_wd is None else muon_wd
+        adam_wd = wd if adam_wd is None else adam_wd
 
         # sort by how big a parameter is and round robbin to ranks. load balance
         order = sorted(range(len(muon_params)), key = lambda i: -muon_params[i].numel())
@@ -23,8 +27,8 @@ class DistributedMuon(Muon):
 
         super().__init__(
             [
-                {"params": mine, "lr": muon_lr},
-                {"params": adam_params, "algorithm": "adamw", "lr": adam_lr, "betas": adam_betas},
+                {"params": mine, "lr": muon_lr, "wd": muon_wd},
+                {"params": adam_params, "algorithm": "adamw", "lr": adam_lr, "betas": adam_betas, "wd": adam_wd},
             ],
             wd=wd,
             **kwargs
@@ -53,10 +57,13 @@ class DistributedMuon(Muon):
             else:
                 p.grad.detach().zero_()
 
-def muon(model: AutoModelForCausalLM, adam_lr=1e-3, adam_beta1=0.9,adam_beta2=0.95, muon_lr=1e-2, muon_momentum=0.95, wd=0.1, adam_eps=1e-8) -> Muon:
+def muon(model: AutoModelForCausalLM, adam_lr=1e-3, adam_beta1=0.9,adam_beta2=0.95, muon_lr=1e-2, muon_momentum=0.95, wd=0.1, adam_eps=1e-8, adam_wd=None, muon_wd=None) -> Muon:
     muon_params = [p for n, p in model.named_parameters() if p.ndim >= 2 and "embed" not in n]
     adam_params = [p for n, p in model.named_parameters() if p.ndim < 2 or "embed" in n]
 
-    optimizer = DistributedMuon(muon_params, adam_params, muon_lr=muon_lr, momentum=muon_momentum, adam_lr=adam_lr, adam_betas=(adam_beta1, adam_beta2), wd=wd, adam_eps=adam_eps)
+    optimizer = DistributedMuon(muon_params, adam_params, 
+                                muon_lr=muon_lr, momentum=muon_momentum, 
+                                adam_lr=adam_lr, adam_betas=(adam_beta1, adam_beta2), adam_eps=adam_eps,
+                                wd=wd, adam_wd=adam_wd, muon_wd=muon_wd)
 
     return optimizer

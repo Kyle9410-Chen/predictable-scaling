@@ -54,6 +54,8 @@ def get_args():
     p.add_argument("--adam_beta1", type=float, default=0.9)
     p.add_argument("--adam_beta2", type=float, default=0.999)
     p.add_argument("--wd", type=float, default=0.1)
+    p.add_argument("--adam-wd", type=float)
+    p.add_argument("--muon-wd", type=float)
     p.add_argument("--adam_eps", type=float, default=1e-8)
     p.add_argument("--scale", type=str, default="150M")
     p.add_argument("--save-dir", type=str, default="models")
@@ -88,7 +90,11 @@ def main():
         
         model = DistributedDataParallel(model, device_ids=[dist_info.local_rank])
 
-        opt = muon(model, adam_lr=args.adam_lr, adam_beta1=args.adam_beta1, adam_beta2=args.adam_beta2, muon_lr=args.muon_lr, muon_momentum=args.muon_momentum, wd=args.wd, adam_eps=args.adam_eps)
+        opt = muon(model, 
+                   adam_lr=args.adam_lr, adam_beta1=args.adam_beta1, adam_beta2=args.adam_beta2, adam_eps=args.adam_eps,
+                   muon_lr=args.muon_lr, muon_momentum=args.muon_momentum, 
+                   wd=args.wd, adam_wd=args.adam_wd, muon_wd=args.muon_wd)
+        
         start_state, skip, progress = None, None, None
         if src:
             start_state, progress = load_train_state(src, opt, dist_info)
