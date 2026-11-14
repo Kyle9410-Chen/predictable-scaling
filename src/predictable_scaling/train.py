@@ -7,6 +7,7 @@ import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel
 from predictable_scaling.scheduler import TokenLRScheduler
 from predictable_scaling.eval import eval
+from predictable_scaling.checkpoint import save_checkpoint, prune_checkpoints
 from torch._utils import _flatten_dense_tensors, _unflatten_dense_tensors
 from contextlib import nullcontext
 
@@ -23,6 +24,18 @@ class LogConfig:
         self.config = config
         self.profile = profile
 
+class CkptConfig:
+    def __init__(self, ckpt_every:int = 0, keep_last: int =2, ckpt_at: tuple[int, ...]=(), save_dir: str=""):
+        self.ckpt_every = ckpt_every
+        self.keep_last = keep_last
+        self.ckpt_at = ckpt_at
+        self.save_dir = save_dir
+
+class BranchConfig:
+    def __init__(self, start_state: dict=None, start_progress: dict=None):
+        self.start_state = start_state
+        self.start_progress = start_progress
+
 def _t():
     torch.cuda.synchronize()
     return time.perf_counter()
@@ -36,9 +49,13 @@ def train(
         dist_info: DistInfo, 
         token_per_step: int,
         max_tokens: int,
-        log_config: LogConfig=None
-        ):
+        log_config: LogConfig=None,
+        ckpt_config: CkptConfig=None,
+        branch_config: BranchConfig=None,
+    ):
     
+    start_state = branch_config.start_state if branch_config else {}
+
     if dist_info.is_main:
         wandb.init(
             project="lab6-predictable-scaling",
@@ -48,14 +65,24 @@ def train(
             )
     
     model.train()
-    last_time = time.perf_counter()
-    last_token = 0
-    tokens_seen = 0
-    step = 0
-    lr = 1e-3
+
+    # start from resume state if any
+    step0 = start_state.get("step", 0)
+    tokens_seen = start_state.get("tokens_seen", 0)
 
     # critical batch size logging
-    ema_g2 = ema_trS = None
+    ema_g2 = start_state.get("ema_g2")
+    ema_trS = start_state.get("ema_trS")
+    
+    last_time = time.perf_counter()
+    last_token = tokens_seen
+
+    progress: dict[int, int] = dict(branch_config.start_progress) if branch_config else {}
+    if ckpt_config is not None and ckpt_config.ckpt_every > 0:
+        next_roll = (tokens_seen // ckpt_config.ckpt_every + 1) * ckpt_config.ckpt_every
+    else:
+        next_roll = None
+    pending_at = [t for t in ckpt_config.ckpt_at if t > tokens_seen] if ckpt_config else []
 
     if log_config.profile:
         from collections import defaultdict
@@ -63,9 +90,13 @@ def train(
         n_timed = 0
         t_end = _t()
 
-    for step, batch in enumerate(train_loader, start=1):
+    for step, batch in enumerate(train_loader, start=step0 + 1):
         if log_config.profile:
             t_data = _t()
+
+        # update progress for this shard
+        shard, frag = batch.pop("data_pos")
+        progress[shard] = frag
 
         batch = {k: v.to(dist_info.device, non_blocking=True) if torch.is_tensor(v) else v for k, v in batch.items()}
         torch._dynamo.mark_dynamic(batch["cu_seq_lens_q"], 0) # it change every batch. tell torch compile it is dynamic
@@ -160,6 +191,27 @@ def train(
 
 
         tokens_seen += token_per_step
+
+        # save checkpoint
+        keep = bool(pending_at) and tokens_seen >= pending_at[0]
+        roll = next_roll is not None and next_roll <= tokens_seen
+        if keep or roll:
+            path=f"{ckpt_config.save_dir}/tok_{tokens_seen}"
+            save_checkpoint(path, model, opt, 
+                            {"step": step, "tokens_seen": tokens_seen, "ema_g2": ema_g2, "ema_trS": ema_trS,
+                             "wandb_id": wandb.run.id if dist_info.is_main else None},
+                             progress, dist_info)
+            if dist_info.is_main:
+                if keep:
+                    open(f"{path}/KEEP", "w").close()
+                prune_checkpoints(ckpt_config.save_dir, ckpt_config.keep_last)
+            dist.barrier() # every rank complete saving
+            while pending_at and tokens_seen >= pending_at[0]:
+                pending_at.pop(0)
+            if next_roll is not None:
+                next_roll = (tokens_seen // ckpt_config.ckpt_every + 1) * ckpt_config.ckpt_every if ckpt_config.ckpt_every else None
+            last_time = time.perf_counter() # keep save time out of tokens/sec
+
 
         # log loss, token_seen, lr
         if measure:

@@ -17,9 +17,23 @@ def wsd_shape(warmup_frac=0.01, decay_frac=0.2, min_ratio=0.0) -> Callable[[floa
     def shape(p: float) -> float:
         if p < warmup_frac:
             return p / warmup_frac
-        if p < decay_start:
+        if decay_frac == 0 or p < decay_start:
             return 1.0
         return 1 - (1 - min_ratio) * (p - decay_start) / decay_frac
+    
+    return shape
+
+def power_cool_shape(warmup_frac=0.0, decay_frac=0.5, power=1.2, min_ratio=0.0) -> Callable[[float], float]:
+    decay_start = 1 - decay_frac
+
+    def shape(p: float) -> float:
+        if p < warmup_frac:
+            return p / warmup_frac
+        if decay_frac == 0 or p < decay_start:
+            return 1.0
+        
+        t = (p - decay_start) / decay_frac
+        return min_ratio + (1 - min_ratio) * ((1 - t) ** power)
     
     return shape
 

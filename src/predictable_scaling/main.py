@@ -13,9 +13,9 @@ from torch.nn.parallel import DistributedDataParallel
 from predictable_scaling.optimizer import muon, soap, soap_muon
 from predictable_scaling.dataloader import load_dataset
 from predictable_scaling.model import build_model, save_model
-from predictable_scaling.train import train
-from predictable_scaling.scheduler import TokenLRScheduler, wsd_shape
-from predictable_scaling.train import LogConfig
+from predictable_scaling.train import train, LogConfig, BranchConfig, CkptConfig
+from predictable_scaling.scheduler import TokenLRScheduler, cosine_shape, wsd_shape, power_cool_shape
+from predictable_scaling.checkpoint import load_model_weights, load_train_state
 
 @dataclass(frozen=True)
 class DistInfo:
@@ -41,7 +41,7 @@ def setup_distributed() -> DistInfo:
 
 def get_args():
     p = argparse.ArgumentParser()
-    p.add_argument("--max-tokens", type=int, default=30e9)
+    p.add_argument("--max-tokens", type=float, default=30e9)
     p.add_argument("--log-every", type=int, default=10)
     p.add_argument("--eval-every", type=int, default=500)
     p.add_argument("--name", type=str, default="training")
@@ -49,6 +49,9 @@ def get_args():
     p.add_argument("--batch-size", type=int, default=4) # number of sequence per device per batch
     p.add_argument("--opt", type=str, default="muon")
     p.add_argument("--soap_lr", type=float, default=3e-3)
+    p.add_argument("--lr-scheduler", type=str, default="wsd") # "wsd", "cosine", "powercool"
+    p.add_argument("--decay-frac", type=float, default=0.2)
+    p.add_argument("--powercool-exp", type=float, default=1.2) # exponent for powercool schedule, only needed if lr scheduler is power cool
     p.add_argument("--muon_lr", type=float, default=2.5e-3)
     p.add_argument("--muon_momentum", type=float, default=0.95)
     p.add_argument("--adam_lr", type=float, default=1.2e-3)
@@ -59,6 +62,10 @@ def get_args():
     p.add_argument("--scale", type=str, default="150M")
     p.add_argument("--save-dir", type=str, default="models")
     p.add_argument("--profile", action="store_true")
+
+    # checkpoint and branch
+    p.add_argument("--ckpt-at", type=str, default="") # comma seperated value. save checkpoint at token count
+    p.add_argument("--branch-from", type=str, default="") # the checkpoint you want to branch from
     
     return p.parse_args()
 
@@ -66,9 +73,15 @@ def main():
     dist_info = setup_distributed()
     args = get_args()
     seq_len = 8192
+    max_tokens = int(args.max_tokens)
+    save_dir = f"{args.save_dir}/{args.name}"
 
     try:
+        src = args.branch_from if args.branch_from != "" else None
+        
         model = build_model(scale=args.scale).to(dist_info.device)
+        if src:
+            load_model_weights(src, model, dist_info.device)
 
         torch._dynamo.config.ignore_logging_functions.add(logging.Logger.warning_once)
         # raise the recompile limit, since the default 8 is less than the layers required by llama
@@ -87,15 +100,39 @@ def main():
             "soap": soap_opt,
             "soap-muon": soap_muon_opt
         }
+        
+        start_state, skip, progress = None, None, None
+        if src:
+            start_state, progress = load_train_state(src, opt, dist_info)
+            skip = {shard: frag + 1 for shard, frag in progress.items()}
 
         train_loader = load_dataset(dist_info.rank, dist_info.world_size, split="train", batch_size=args.batch_size, seq_len=seq_len)
         eval_loader = load_dataset(dist_info.rank, dist_info.world_size, split="eval", workers=4)
-        shape = wsd_shape()
+        
+        if args.lr_scheduler == "wsd":
+            shape = wsd_shape(decay_frac=args.decay_frac)
+        elif args.lr_scheduler == "cosine":
+            shape = cosine_shape()
+        elif args.lr_scheduler == "powercool":
+            shape = power_cool_shape(decay_frac=args.decay_frac, power=args.powercool_exp)
+        
         scheduler = TokenLRScheduler(opt_dict[args.opt], shape, args.max_tokens)
 
         run_config = {
             **vars(args)
         }
+
+        branch_config = None
+        if src:
+            branch_config = BranchConfig(
+                start_state=start_state,
+                start_progress=progress
+            )
+
+        ckpt_config = None
+        if args.ckpt_at != "":
+            ckpt_at = sorted(int(float(x)) for x in args.ckpt_at.split(","))
+            ckpt_config = CkptConfig(ckpt_at=ckpt_at, save_dir=save_dir)
 
         train(
             model=model,
@@ -104,7 +141,7 @@ def main():
             eval_loader=eval_loader, 
             scheduler=scheduler,
             dist_info=dist_info, 
-            max_tokens=args.max_tokens, 
+            max_tokens=max_tokens, 
             token_per_step=dist_info.world_size * (args.batch_size * seq_len - 1),
             log_config=LogConfig(
                 name=args.name, 
@@ -113,12 +150,14 @@ def main():
                 eval_every=args.eval_every, 
                 config=run_config,
                 profile=args.profile
-                )
+                ),
+            branch_config=branch_config,
+            ckpt_config=ckpt_config
             )
 
         dist.barrier()
         if dist_info.is_main:
-            save_model(model, f"{args.save_dir}/{args.name}")
+            save_model(model, save_dir)
         dist.barrier()
 
     except BaseException:
