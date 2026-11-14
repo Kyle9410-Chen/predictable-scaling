@@ -10,7 +10,7 @@ import torch.distributed as dist
 from dataclasses import dataclass
 from torch.nn.parallel import DistributedDataParallel
 
-from predictable_scaling.optimizer import muon
+from predictable_scaling.optimizer import muon, soap, soap_muon
 from predictable_scaling.dataloader import load_dataset
 from predictable_scaling.model import build_model, save_model
 from predictable_scaling.train import train, LogConfig, BranchConfig, CkptConfig
@@ -47,6 +47,8 @@ def get_args():
     p.add_argument("--name", type=str, default="training")
     p.add_argument("--tags", type=str, default="") # tag is comma seperated
     p.add_argument("--batch-size", type=int, default=4) # number of sequence per device per batch
+    p.add_argument("--opt", type=str, default="muon")
+    p.add_argument("--soap_lr", type=float, default=3e-3)
     p.add_argument("--lr-scheduler", type=str, default="wsd") # "wsd", "cosine", "powercool"
     p.add_argument("--decay-frac", type=float, default=0.2)
     p.add_argument("--powercool-exp", type=float, default=1.2) # exponent for powercool schedule, only needed if lr scheduler is power cool
@@ -90,23 +92,31 @@ def main():
         
         model = DistributedDataParallel(model, device_ids=[dist_info.local_rank])
 
-        opt = muon(model, adam_lr=args.adam_lr, adam_beta1=args.adam_beta1, adam_beta2=args.adam_beta2, muon_lr=args.muon_lr, muon_momentum=args.muon_momentum, wd=args.wd, adam_eps=args.adam_eps)
+        muon_opt = muon(model, adam_lr=args.adam_lr, adam_beta1=args.adam_beta1, adam_beta2=args.adam_beta2, muon_lr=args.muon_lr, muon_momentum=args.muon_momentum, wd=args.wd, adam_eps=args.adam_eps)
+        soap_opt = soap(model, lr=args.soap_lr)
+        soap_muon_opt = soap_muon(model, shampoo_beta=0.95, adam_lr=args.adam_lr, adam_beta1=args.adam_beta1, adam_beta2=args.adam_beta2, muon_lr=args.muon_lr, muon_momentum=args.muon_momentum, wd=args.wd)
+        opt_dict = {
+            "muon": muon_opt,
+            "soap": soap_opt,
+            "soap-muon": soap_muon_opt
+        }
+        
         start_state, skip, progress = None, None, None
         if src:
             start_state, progress = load_train_state(src, opt, dist_info)
-            skip = {shard: frag + 1 for shard, frag in progress.items()} # skip partly read fragment
+            skip = {shard: frag + 1 for shard, frag in progress.items()}
 
-        train_loader = load_dataset(dist_info.rank, dist_info.world_size, split="train", batch_size=args.batch_size, seq_len=seq_len, skip=skip)
+        train_loader = load_dataset(dist_info.rank, dist_info.world_size, split="train", batch_size=args.batch_size, seq_len=seq_len)
         eval_loader = load_dataset(dist_info.rank, dist_info.world_size, split="eval", workers=4)
-
+        
         if args.lr_scheduler == "wsd":
             shape = wsd_shape(decay_frac=args.decay_frac)
         elif args.lr_scheduler == "cosine":
             shape = cosine_shape()
         elif args.lr_scheduler == "powercool":
             shape = power_cool_shape(decay_frac=args.decay_frac, power=args.powercool_exp)
-
-        scheduler = TokenLRScheduler(opt, shape, max_tokens)
+        
+        scheduler = TokenLRScheduler(opt_dict[args.opt], shape, args.max_tokens)
 
         run_config = {
             **vars(args)
@@ -126,7 +136,7 @@ def main():
 
         train(
             model=model,
-            opt=opt, 
+            opt=opt_dict[args.opt], 
             train_loader=train_loader, 
             eval_loader=eval_loader, 
             scheduler=scheduler,
