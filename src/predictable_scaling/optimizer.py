@@ -6,6 +6,8 @@ from torch import Tensor
 from torch.optim import Optimizer
 import torch.distributed as dist
 
+LINEAR_STATE_KEYS = {"exp_avg", "momentum_buffer", "grad_avg"}
+
 class DistributedMuon(Muon):
     """Muon where each rank orthogonalizes only the matrices it owns, then
     broadcasts the updated weights. Same result as plain Muon under DDP
@@ -74,153 +76,200 @@ def soap(model: AutoModelForCausalLM, lr=3e-3, beta1=0.95, beta2=0.95, shampoo_b
         else:
             no_decay.append(p)
 
+    inner = torch.optim.AdamW(model.parameters(), lr=lr, betas=(beta1, beta2), weight_decay=weight_decay)
+
     optimizer = SOAP(
-        [
-            {"params": decay, "weight_decay": weight_decay},
-            {"params": no_decay, "weight_decay": 0.0}
-        ],
-        lr=lr,
-        betas=(beta1, beta2),
+        inner=inner,
         shampoo_beta=shampoo_beta,
         precondition_frequency=precondition_frequency,
-        max_precond_dim=max_precond_dim,
-        weight_decay=weight_decay
+        max_precond_dim=max_precond_dim
     )
 
     return optimizer
+
+def soap_muon(model: AutoModelForCausalLM, shampoo_beta=0.95, adam_lr=1e-3, adam_beta1=0.9, adam_beta2=0.95, muon_lr=1e-2, muon_momentum=0.95, wd=0.1):
+    muon_params = [p for n, p in model.named_parameters() if p.ndim >= 2 and "embed" not in n]
+    adam_params = [p for n, p in model.named_parameters() if p.ndim < 2 or "embed" in n]
+
+    inner = Muon([
+            {"params": muon_params, "lr": muon_lr},
+            {"params": adam_params, "algorithm": "adamw", "lr": adam_lr, "betas": (adam_beta1, adam_beta2)},
+            ],
+            wd=wd,
+            momentum=muon_momentum
+        )
+    optimizer = SOAP(inner=inner, shampoo_beta=shampoo_beta)
+
+    return optimizer
+
+class Basis:
+    def __init__(self, QL: Tensor, QR: Tensor):
+        self.QL: Tensor = QL
+        self.QR: Tensor = QR
     
+    def prj(self, x: Tensor) -> Tensor:
+        if self.QL is not None:
+            x = self.QL.T @ x
+        if self.QR is not None:
+            x = x @ self.QR
+        return x
+
+    def back(self, x: Tensor) -> Tensor:
+        if self.QL is not None:
+            x = self.QL @ x
+        if self.QR is not None:
+            x = x @ self.QR.T
+        return x
+
+def eigh_basis(M: Tensor) -> Tensor:
+    eye = torch.eye(M.shape[0], device=M.device, dtype=M.dtype)
+    _, Q = torch.linalg.eigh(M + 1e-30 * eye)
+    return torch.flip(Q, dims=[1])
 
 class SOAP(Optimizer):
     def __init__(
             self,
-            params,
-            lr=3e-3,
-            betas=(0.95,0.95),
-            shampoo_beta=None,
-            eps=1e-8,
-            weight_decay=0.01,
-            precondition_frequency=10,
-            max_precond_dim=10000
+            inner: Optimizer,
+            shampoo_beta: float = 0.95,
+            precondition_frequency: int = 10,
+            max_precond_dim: int = 10000,
+            precondition = None,
+            state_kinds = None
     ):
-        defaults = dict(
-            lr=lr, betas=betas, shampoo_beta=shampoo_beta, eps=eps,
-            weight_decay=weight_decay,
-            precondition_frequency=precondition_frequency,
-            max_precond_dim=max_precond_dim
-        )
-        super().__init__(params, defaults)
+        self.inner = inner
+        self.shampoo_beta = shampoo_beta
+        self.precondition_frequency = precondition_frequency
+        self.max_precond_dim = max_precond_dim
+        self._precond = precondition or (lambda p: p.dim() >= 2)
+        self._state_kinds = dict(state_kinds or {})
+        self._warned = set()
 
-    @staticmethod
-    def _prj(x: Tensor, QL: Tensor, QR: Tensor) -> Tensor:
-        if QL is not None:
-            x = QL.T @ x
-        if QR is not None:
-            x = x @ QR
-        return x
+        self._ready = False
+        super().__init__(inner.param_groups, defaults={})
+        self.param_groups = inner.param_groups
+        self._ready = True
     
-    @staticmethod
-    def _prj_back(x: Tensor, QL: Tensor, QR: Tensor) -> Tensor:
-        if QL is not None:
-            x = QL @ x
-        if QR is not None:
-            x = x @ QR.T
-        return x
+    def add_param_group(self, param_group):
+        if self._ready:
+            self.inner.add_param_group(param_group)
+        else:
+            super().add_param_group(param_group)
 
-    @staticmethod
-    def _eigh_basis(M: Tensor):
-        eye = torch.eye(M.shape[0], device=M.device, dtype=M.dtype)
-        _, Q = torch.linalg.eigh(M + 1e-30 * eye)
-        return torch.flip(Q, dims=[1])
+    def _init_basis(self, state: dict, G: Tensor):
+        m, n = G.shape
+        state["step"] = 0
+        state["L"] = None
+        state["R"] = None
+        state["QL"] = None
+        state["QR"] = None
 
-    @staticmethod
-    def _refresh_basis(M: Tensor, Q: Tensor, exp_avg_sq: Tensor, dim: int):
-        est_eig = torch.diag(Q.T @ M @ Q)
-        order = torch.argsort(est_eig, descending=True)
-        Q = Q[:, order]
-        exp_avg_sq = exp_avg_sq.index_select(dim, order)
-        Q, _ = torch.linalg.qr(M @ Q)
-        return Q, exp_avg_sq
+        if m <= self.max_precond_dim:
+            state["L"] = (1 - self.shampoo_beta) * (G @ G.T)
+            state["QL"] = eigh_basis(state["L"])
+        if n <= self.max_precond_dim:
+            state["R"] = (1 - self.shampoo_beta) * (G.T @ G)
+            state["QR"] = eigh_basis(state["R"])
+    
+    def _kind(self, key):
+        if key in self._state_kinds:
+            return self._state_kinds[key]
+        return "linear" if key in LINEAR_STATE_KEYS else "permute"
+
+    def _refresh_basis(self, p: Tensor, state: dict):
+        old = Basis(state["QL"], state["QR"])
+        orders = {}
+        for st, qkey, dim in (("L", "QL", 0), ("R", "QR", 1)):
+            M: Tensor = state[st]
+            if M is None:
+                continue
+            Q: Tensor = state[qkey]
+            MQ = M @ Q
+            est_eig = (Q * MQ).sum(0)
+            order = torch.argsort(est_eig, descending=True)
+            state[qkey], _ = torch.linalg.qr(MQ[:, order])
+            orders[dim] = order
+        new = Basis(state["QL"], state["QR"])
+
+        m = p.shape[0]
+        for key, v in self.inner.state[p].items():
+            if not torch.is_tensor(v) or v.dim() == 0:
+                continue
+            if v.shape != p.shape:
+                if key not in self._warned:
+                    self._warned.add(key)
+                    continue
+            
+            kind = self._kind(key)
+            if kind == "keep":
+                continue
+            if kind == "reset":
+                v.zero_()
+                continue
+            v2 = v.reshape(m, -1).float()
+            if kind == "linear":
+                v2 = new.prj(old.back(v2))
+            elif kind == "permute":
+                for dim, order in orders.items():
+                    v2 = v2.index_select(dim, order)
+            else:
+                raise ValueError(f"unknown state kind {kind!r} for '{key}'")
+            
+            v.copy_(v2.reshape(v.shape))
 
     @torch.no_grad()
     def step(self):
         loss = None
+
+        shampoo_beta = self.shampoo_beta
+        pending, hidden = [], []
         
         for group in self.param_groups:
-            beta1, beta2 = group["betas"]
-            shampoo_beta = group["shampoo_beta"] if group["shampoo_beta"] is not None else beta2
-
-            p: Tensor
             for p in group["params"]:
-                if p.grad is None:
+                if p.grad is None or not self._precond(p):
                     continue
-            
-                is_matrix = p.dim() >= 2
-                grad = p.grad.float()
-                G = grad.reshape(grad.shape[0], -1) if is_matrix else grad
-                state = self.state[p]
+                st = self.state[p]
+                G = p.grad.detach().float().reshape(p.shape[0], -1)
 
-                # init
-                if len(state) == 0:
-                    state["step"] = 0
-                    state["exp_avg"] = torch.zeros_like(G)
-                    state["exp_avg_sq"] = torch.zeros_like(G)
-                    state["L"] = None
-                    state["R"] = None
-                    state["QL"] = None
-                    state["QR"] = None
-
-                    if is_matrix:
-                        m, n = G.shape
-                        if m <= group["max_precond_dim"]:
-                            state["L"] = (1 - shampoo_beta) * (G @ G.T)
-                            state["QL"] = self._eigh_basis(state["L"])
-                        if n <= group["max_precond_dim"]:
-                            state["R"] = (1 - shampoo_beta) * (G.T @ G)
-                            state["QR"] = self._eigh_basis(state["R"])
-                    
+                if len(st) == 0:
+                    self._init_basis(st, G)
+                    hidden.append((p, p.grad))
+                    p.grad = None
                     continue
 
-                state["step"] += 1
-                t = state["step"]
-                QL: Tensor = state["QL"]
-                QR: Tensor = state["QR"]
-                exp_avg: Tensor = state["exp_avg"]
-                exp_avg_sq: Tensor = state["exp_avg_sq"]
+                if st["QL"] is None and st["QR"] is None:
+                    continue
 
-                # Adam
+                B = Basis(st["QL"], st["QR"])
+                W = p.detach().float().reshape(G.shape).clone()
+                rot = B.prj(W)
+                p.copy_(rot.reshape(p.shape))
+                before = rot.to(p.dtype).float()
 
-                G_rot = self._prj(G, QL, QR)
-                exp_avg.mul_(beta1).add_(G, alpha=1 - beta1)
-                exp_avg_sq.mul_(beta2).addcmul_(G_rot, G_rot, value=1 - beta2)
+                orig_grad = p.grad
+                p.grad = B.prj(G).reshape(p.shape).to(orig_grad.dtype)
+                pending.append((p, W, before, G, orig_grad))
 
-                # Adam step in eigenbasis
-
-                m_rot = self._prj(exp_avg, QL, QR)
-                update_rot = m_rot / (exp_avg_sq.sqrt() + group["eps"])
-                update: Tensor = self._prj_back(update_rot, QL, QR)
-
-                bias_c1 = 1 - beta1 ** t
-                bias_c2 = 1 - beta2 ** t
-                step_size = group["lr"] * (bias_c2 ** 0.5) / bias_c1
-
-                p.add_(update.reshape(p.shape).to(p.dtype), alpha=-step_size)
-
-                if group["weight_decay"] > 0:
-                    p.add_(p, alpha=-group["lr"] * group["weight_decay"])
-
-                # Shampoo
-                
-                if state["L"] is not None:
-                    state["L"].mul_(shampoo_beta).add_(G @ G.T, alpha=1 - shampoo_beta)
-                if state["R"] is not None:
-                    state["R"].mul_(shampoo_beta).add_(G.T @ G, alpha=1 - shampoo_beta)
-
-                if t % group["precondition_frequency"] == 0:
-                    if state["L"] is not None:
-                        state["QL"], state["exp_avg_sq"] = self._refresh_basis(state["L"], state["QL"], state["exp_avg_sq"], dim=0)
-
-                    if state["R"] is not None:
-                        state["QR"], state["exp_avg_sq"] = self._refresh_basis(state["R"], state["QR"], state["exp_avg_sq"], dim=1)
+        try:
+            self.inner.step()
+        finally:
+            for p, W, before, G, orig_grad in pending:
+                st = self.state[p]
+                B = Basis(st["QL"], st["QR"])
+                delta = p.detach().float().reshape(W.shape) - before
+                p.copy_((W + B.back(delta)).reshape(p.shape))
+                p.grad = orig_grad
+            for p, g in hidden:
+                p.grad = g
+        
+        for p, _, _, G, _ in pending:
+            st = self.state[p]
+            st["step"] += 1
+            if st["L"] is not None:
+                st["L"].mul_(shampoo_beta).add_(G @ G.T, alpha=(1 - shampoo_beta))
+            if st["R"] is not None:
+                st["R"].mul_(shampoo_beta).add_(G.T @ G, alpha=(1 - shampoo_beta))
+            if st["step"] % self.precondition_frequency == 0:
+                self._refresh_basis(p, st)
 
         return loss
 

@@ -10,7 +10,7 @@ import torch.distributed as dist
 from dataclasses import dataclass
 from torch.nn.parallel import DistributedDataParallel
 
-from predictable_scaling.optimizer import muon, soap
+from predictable_scaling.optimizer import muon, soap, soap_muon
 from predictable_scaling.dataloader import load_dataset
 from predictable_scaling.model import build_model, save_model
 from predictable_scaling.train import train
@@ -81,9 +81,11 @@ def main():
 
         muon_opt = muon(model, adam_lr=args.adam_lr, adam_beta1=args.adam_beta1, adam_beta2=args.adam_beta2, muon_lr=args.muon_lr, muon_momentum=args.muon_momentum, wd=args.wd, adam_eps=args.adam_eps)
         soap_opt = soap(model, lr=args.soap_lr)
+        soap_muon_opt = soap_muon(model, shampoo_beta=0.95, adam_lr=args.adam_lr, adam_beta1=args.adam_beta1, adam_beta2=args.adam_beta2, muon_lr=args.muon_lr, muon_momentum=args.muon_momentum, wd=args.wd)
         opt_dict = {
             "muon": muon_opt,
-            "soap": soap_opt
+            "soap": soap_opt,
+            "soap-muon": soap_muon_opt
         }
 
         train_loader = load_dataset(dist_info.rank, dist_info.world_size, split="train", batch_size=args.batch_size, seq_len=seq_len)
