@@ -14,7 +14,7 @@ from predictable_scaling.optimizer import muon
 from predictable_scaling.dataloader import load_dataset
 from predictable_scaling.model import build_model, save_model
 from predictable_scaling.train import train, LogConfig, BranchConfig, CkptConfig
-from predictable_scaling.scheduler import TokenLRScheduler, wsd_shape
+from predictable_scaling.scheduler import TokenLRScheduler, cosine_shape, wsd_shape, power_cool_shape
 from predictable_scaling.checkpoint import load_model_weights, load_train_state
 
 @dataclass(frozen=True)
@@ -47,7 +47,9 @@ def get_args():
     p.add_argument("--name", type=str, default="training")
     p.add_argument("--tags", type=str, default="") # tag is comma seperated
     p.add_argument("--batch-size", type=int, default=4) # number of sequence per device per batch
+    p.add_argument("--lr-scheduler", type=str, default="wsd") # "wsd", "cosine", "powercool"
     p.add_argument("--decay-frac", type=float, default=0.2)
+    p.add_argument("--powercool-exp", type=float, default=1.2) # exponent for powercool schedule, only needed if lr scheduler is power cool
     p.add_argument("--muon_lr", type=float, default=2.5e-3)
     p.add_argument("--muon_momentum", type=float, default=0.95)
     p.add_argument("--adam_lr", type=float, default=1.2e-3)
@@ -96,7 +98,14 @@ def main():
 
         train_loader = load_dataset(dist_info.rank, dist_info.world_size, split="train", batch_size=args.batch_size, seq_len=seq_len, skip=skip)
         eval_loader = load_dataset(dist_info.rank, dist_info.world_size, split="eval", workers=4)
-        shape = wsd_shape(decay_frac=args.decay_frac)
+
+        if args.lr_scheduler == "wsd":
+            shape = wsd_shape(decay_frac=args.decay_frac)
+        elif args.lr_scheduler == "cosine":
+            shape = cosine_shape()
+        elif args.lr_scheduler == "powercool":
+            shape = power_cool_shape(decay_frac=args.decay_frac, power=args.powercool_exp)
+
         scheduler = TokenLRScheduler(opt, shape, max_tokens)
 
         run_config = {
