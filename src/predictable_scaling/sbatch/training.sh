@@ -46,6 +46,8 @@ uv run --frozen --env-file .env torchrun --nproc-per-node=8 \
     --adam_beta2 0.999 \
     --muon_lr 2.5e-3 \
     --soap_lr 3e-3 \
+    --lr-scheduler powercool \
+    --powercool-exp 2 \
     --wd 0.1 \
     --save-dir "/work/${USER}/predictable-scaling/models" \
     "$@"

@@ -91,22 +91,22 @@ def main():
             layer.compile()
         
         model = DistributedDataParallel(model, device_ids=[dist_info.local_rank])
-
-        muon_opt = muon(model, adam_lr=args.adam_lr, adam_beta1=args.adam_beta1, adam_beta2=args.adam_beta2, muon_lr=args.muon_lr, muon_momentum=args.muon_momentum, wd=args.wd, adam_eps=args.adam_eps)
-        soap_opt = soap(model, lr=args.soap_lr)
-        soap_muon_opt = soap_muon(model, shampoo_beta=0.95, adam_lr=args.adam_lr, adam_beta1=args.adam_beta1, adam_beta2=args.adam_beta2, muon_lr=args.muon_lr, muon_momentum=args.muon_momentum, wd=args.wd)
-        opt_dict = {
-            "muon": muon_opt,
-            "soap": soap_opt,
-            "soap-muon": soap_muon_opt
-        }
+         
+        if args.opt == "muon":
+            opt = muon(model, adam_lr=args.adam_lr, adam_beta1=args.adam_beta1, adam_beta2=args.adam_beta2, muon_lr=args.muon_lr, muon_momentum=args.muon_momentum, wd=args.wd, adam_eps=args.adam_eps)
+        elif args.opt == "soap":
+            opt = soap(model, lr=args.soap_lr)
+        elif args.opt == "soap-muon":
+            opt = soap_muon(model, shampoo_beta=0.95, adam_lr=args.adam_lr, adam_beta1=args.adam_beta1, adam_beta2=args.adam_beta2, muon_lr=args.muon_lr, muon_momentum=args.muon_momentum, wd=args.wd)
+        else:
+            raise ValueError(f"Unknown optimizer {args.opt}")
         
         start_state, skip, progress = None, None, None
         if src:
             start_state, progress = load_train_state(src, opt, dist_info)
             skip = {shard: frag + 1 for shard, frag in progress.items()}
 
-        train_loader = load_dataset(dist_info.rank, dist_info.world_size, split="train", batch_size=args.batch_size, seq_len=seq_len)
+        train_loader = load_dataset(dist_info.rank, dist_info.world_size, split="train", batch_size=args.batch_size, seq_len=seq_len, skip=skip)
         eval_loader = load_dataset(dist_info.rank, dist_info.world_size, split="eval", workers=4)
         
         if args.lr_scheduler == "wsd":
@@ -116,7 +116,7 @@ def main():
         elif args.lr_scheduler == "powercool":
             shape = power_cool_shape(decay_frac=args.decay_frac, power=args.powercool_exp)
         
-        scheduler = TokenLRScheduler(opt_dict[args.opt], shape, args.max_tokens)
+        scheduler = TokenLRScheduler(opt, shape, args.max_tokens)
 
         run_config = {
             **vars(args)
@@ -136,7 +136,7 @@ def main():
 
         train(
             model=model,
-            opt=opt_dict[args.opt], 
+            opt=opt, 
             train_loader=train_loader, 
             eval_loader=eval_loader, 
             scheduler=scheduler,
