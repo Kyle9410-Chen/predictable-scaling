@@ -10,7 +10,8 @@ import torch.distributed as dist
 from dataclasses import dataclass
 from torch.nn.parallel import DistributedDataParallel
 
-from predictable_scaling.optimizer import muon, soap, soap_muon
+from predictable_scaling.optimizer import muon, soap, soap_muon, muon_from_specs
+from predictable_scaling.hparams import load_hp_config, resolve_groups, describe
 from predictable_scaling.dataloader import load_dataset
 from predictable_scaling.model import build_model, save_model
 from predictable_scaling.train import train, LogConfig, BranchConfig, CkptConfig
@@ -63,6 +64,10 @@ def get_args():
     p.add_argument("--save-dir", type=str, default="models")
     p.add_argument("--profile", action="store_true")
 
+    # per-module hyperparameters (muon only). when set, replaces the --adam_* / --muon_* / --wd flags
+    p.add_argument("--hp-config", type=str, default="") # yaml, see hparams.py
+    p.add_argument("--hp", action="append", default=[]) # repeatable dotted override, e.g. --hp groups.embed.lr=3e-3
+
     # checkpoint and branch
     p.add_argument("--ckpt-at", type=str, default="") # comma seperated value. save checkpoint at token count
     p.add_argument("--branch-from", type=str, default="") # the checkpoint you want to branch from
@@ -92,7 +97,18 @@ def main():
         
         model = DistributedDataParallel(model, device_ids=[dist_info.local_rank])
          
-        if args.opt == "muon":
+        hp_specs = None
+        if args.hp_config:
+            if args.opt != "muon":
+                raise ValueError("--hp-config is only supported with --opt muon")
+            hp_specs = resolve_groups(load_hp_config(args.hp_config, args.hp), model.module)
+            opt = muon_from_specs(model, hp_specs)
+            if dist_info.is_main:
+                for name, hp in describe(hp_specs).items():
+                    print(f"hp group {name}: {hp}")
+        elif args.hp:
+            raise ValueError("--hp needs --hp-config")
+        elif args.opt == "muon":
             opt = muon(model, adam_lr=args.adam_lr, adam_beta1=args.adam_beta1, adam_beta2=args.adam_beta2, muon_lr=args.muon_lr, muon_momentum=args.muon_momentum, wd=args.wd, adam_eps=args.adam_eps)
         elif args.opt == "soap":
             opt = soap(model, lr=args.soap_lr)
@@ -103,7 +119,7 @@ def main():
         
         start_state, skip, progress = None, None, None
         if src:
-            start_state, progress = load_train_state(src, opt, dist_info)
+            start_state, progress = load_train_state(src, opt, dist_info, model)
             skip = {shard: frag + 1 for shard, frag in progress.items()}
 
         train_loader = load_dataset(dist_info.rank, dist_info.world_size, split="train", batch_size=args.batch_size, seq_len=seq_len, skip=skip)
@@ -121,6 +137,10 @@ def main():
         run_config = {
             **vars(args)
         }
+        if hp_specs is not None:
+            run_config["hp"] = describe(hp_specs) # resolved values, filterable as hp.<group>.<key>
+            for k in ("adam_lr", "adam_beta1", "adam_beta2", "adam_eps", "muon_lr", "muon_momentum", "wd"):
+                run_config.pop(k) # unused with --hp-config; drop so they can't be mistaken for real values
 
         branch_config = None
         if src:

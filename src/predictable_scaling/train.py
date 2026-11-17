@@ -229,9 +229,10 @@ def train(
                     {
                         "train/loss": avg_loss.item(), 
                         "train/loss_max": max_loss.item(), 
-                        "train/lr": float(opt.param_groups[0]["lr"]),
-                        "train/lr_muon": float(opt.param_groups[0]["lr"]),
-                        "train/lr_adam": float(opt.param_groups[1]["lr"]),
+                        "train/lr_ratio": scheduler.ratio,
+                        # by group name; a muon group this rank owns no matrix of is absent here
+                        # (its lr is still base * lr_ratio)
+                        **{f"train/lr_{g.get('name', i)}": float(g["lr"]) for i, g in enumerate(opt.param_groups)},
                         "train/total_tokens_seen": tokens_seen,
                         "train/tokens_per_second": tokens_per_sec
                     }, 

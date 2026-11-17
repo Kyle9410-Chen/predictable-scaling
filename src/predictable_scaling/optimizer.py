@@ -13,30 +13,37 @@ class DistributedMuon(Muon):
     broadcasts the updated weights. Same result as plain Muon under DDP
     (grads are already averaged), with ~1/world_size of the optimizer compute."""
 
-    def __init__(self, muon_params, adam_params, *, muon_lr, adam_lr, adam_betas, wd, **kwargs):
+    def __init__(self, groups: list[dict], all_muon_params: list, **kwargs):
+        """groups: muonium param-group dicts, each with a "name" and an "algorithm".
+        all_muon_params: every muon parameter in model order. Ownership is decided over
+        this list (not per group), so regrouping never changes which rank owns a matrix
+        and old per-rank optimizer checkpoints stay valid."""
         dist_on = dist.is_available() and dist.is_initialized()
         rank = dist.get_rank() if dist_on else 0
         world = dist.get_world_size() if dist_on else 1
 
         # sort by how big a parameter is and round robbin to ranks. load balance
-        order = sorted(range(len(muon_params)), key = lambda i: -muon_params[i].numel())
-        owner = [0] * len(muon_params) # record who which rank own a parameter matrix
-
+        order = sorted(range(len(all_muon_params)), key = lambda i: -all_muon_params[i].numel())
+        owner = [0] * len(all_muon_params) # record which rank owns a parameter matrix
         for k, i in enumerate(order):
             owner[i] = k % world
-        mine = [p for p, o in zip(muon_params, owner) if o == rank]
+        owner_of = {id(p): o for p, o in zip(all_muon_params, owner)}
 
-        super().__init__(
-            [
-                {"params": mine, "lr": muon_lr},
-                {"params": adam_params, "algorithm": "adamw", "lr": adam_lr, "betas": adam_betas},
-            ],
-            wd=wd,
-            **kwargs
-        )
+        mine = []
+        for g in groups:
+            g = dict(g)
+            if g.get("algorithm", "muon") == "muon":
+                g["params"] = [p for p in g["params"] if owner_of[id(p)] == rank]
+            mine.append(g)
+        name_of = {id(p): g["name"] for g in mine for p in g["params"]}
+
+        # muonium drops empty groups (a rank may own none of a small group) and unknown keys
+        super().__init__(mine, **kwargs)
+        for g in self.param_groups:
+            g["name"] = name_of[id(g["params"][0])]
 
         self._dist_on = dist_on and world > 1
-        self._muon_owner = list(zip(muon_params, owner))
+        self._muon_owner = list(zip(all_muon_params, owner))
 
     @torch.no_grad()
     def step(self, closure=None):
@@ -62,9 +69,25 @@ def muon(model: AutoModelForCausalLM, adam_lr=1e-3, adam_beta1=0.9,adam_beta2=0.
     muon_params = [p for n, p in model.named_parameters() if p.ndim >= 2 and "embed" not in n]
     adam_params = [p for n, p in model.named_parameters() if p.ndim < 2 or "embed" in n]
 
-    optimizer = DistributedMuon(muon_params, adam_params, muon_lr=muon_lr, momentum=muon_momentum, adam_lr=adam_lr, adam_betas=(adam_beta1, adam_beta2), wd=wd, adam_eps=adam_eps)
+    groups = [
+        {"name": "muon", "params": muon_params, "algorithm": "muon",
+         "lr": muon_lr, "momentum": muon_momentum, "wd": wd},
+        {"name": "adam", "params": adam_params, "algorithm": "adamw",
+         "lr": adam_lr, "betas": (adam_beta1, adam_beta2), "eps": adam_eps, "wd": wd},
+    ]
+    return DistributedMuon(groups, muon_params)
 
-    return optimizer
+def muon_from_specs(model, specs: list[dict]) -> DistributedMuon:
+    """Build DistributedMuon from hparams.resolve_groups() output. model is the DDP wrapper."""
+    named = dict(model.module.named_parameters())
+    groups = []
+    for s in specs:
+        g = {k: v for k, v in s.items() if k != "param_names"}
+        g["params"] = [named[n] for n in s["param_names"]]
+        groups.append(g)
+    muon_names = {n for s in specs if s["algorithm"] == "muon" for n in s["param_names"]}
+    all_muon = [p for n, p in model.module.named_parameters() if n in muon_names]  # model order
+    return DistributedMuon(groups, all_muon)
 
 def soap(model: AutoModelForCausalLM, lr=3e-3, beta1=0.95, beta2=0.95, shampoo_beta=0.95, weight_decay=0.1, precondition_frequency=10, max_precond_dim=10000) -> SOAP:
     decay, no_decay = [], []
@@ -98,6 +121,8 @@ def soap_muon(model: AutoModelForCausalLM, shampoo_beta=0.95, adam_lr=1e-3, adam
             wd=wd,
             momentum=muon_momentum
         )
+    for g, name in zip(inner.param_groups, ("muon", "adam")):  # for lr logging by name
+        g["name"] = name
     optimizer = SOAP(inner=inner, shampoo_beta=shampoo_beta)
 
     return optimizer
