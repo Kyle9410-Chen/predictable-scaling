@@ -149,7 +149,7 @@ def packed_collate(items):
         "data_pos": (items[-1]["shard"], items[-1]["frag"]) # supply the information to training loop for saving data progress when creating checkpoints
     }
 
-def load_dataset(rank: int, world_size: int, split: str="train", workers: int=8, batch_size=4, seq_len=8192, skip: dict[int, int] = None) -> DataLoader:
+def load_dataset(uri: str, rank: int, world_size: int, split: str="train", workers: int=8, batch_size=4, seq_len=8192, skip: dict[int, int] = None) -> DataLoader:
     s3.get_process(read_only=True)
 
     tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-3.2-1B")
@@ -161,7 +161,7 @@ def load_dataset(rank: int, world_size: int, split: str="train", workers: int=8,
     # list evaluation set in memory prevent loading it every time
     if split == "eval":
         ds = SequentialLanceDataset(
-                "s3://flock-datasets/fineweb-edu",
+                uri,
                 rank=0,
                 world_size=1,
                 split="eval"
@@ -181,7 +181,7 @@ def load_dataset(rank: int, world_size: int, split: str="train", workers: int=8,
 
     else:
         base = SequentialLanceDataset(
-                "s3://flock-datasets/fineweb-edu",
+                uri,
                 rank=rank,
                 world_size=world_size,
                 split="train",

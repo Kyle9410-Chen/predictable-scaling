@@ -107,8 +107,8 @@ def main():
             start_state, progress = load_train_state(src, opt, dist_info)
             skip = {shard: frag + 1 for shard, frag in progress.items()}
 
-        train_loader = load_dataset(dist_info.rank, dist_info.world_size, split="train", batch_size=args.batch_size, seq_len=seq_len, skip=skip)
-        eval_loader = load_dataset(dist_info.rank, dist_info.world_size, split="eval", workers=4)
+        train_loader = load_dataset("s3://flock-datasets/lab7/ben-kyle/dolma3_mix_150B_paloma_decon", dist_info.rank, dist_info.world_size, split="train", batch_size=args.batch_size, seq_len=seq_len, skip=skip)
+        eval_loader = load_dataset("s3://flock-datasets/lab7/ben-kyle/dolma3_mix_150B_paloma_decon", dist_info.rank, dist_info.world_size, split="eval", workers=4)
         
         if args.lr_scheduler == "wsd":
             shape = wsd_shape(decay_frac=args.decay_frac, min_ratio=args.lr_min_ratio)

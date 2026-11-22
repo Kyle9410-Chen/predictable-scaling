@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 
 class LogConfig:
     def __init__(self, name, log_every: int=10,eval_every: int=100, tags: list[str]=["baseline"], config: dict=None, profile=False):
-        self.project = "lab6-predictable-scaling"
+        self.project = "lab7-data-curation"
         self.name = name
         self.log_every = log_every
         self.eval_every = eval_every
@@ -58,7 +58,7 @@ def train(
 
     if dist_info.is_main:
         wandb.init(
-            project="lab6-predictable-scaling",
+            project=log_config.project,
             name=log_config.name,
             tags=log_config.tags,
             config=log_config.config,
@@ -232,7 +232,7 @@ def train(
                         "train/lr": float(opt.param_groups[0]["lr"]),
                         "train/lr_muon": float(opt.param_groups[0]["lr"]),
                         "train/lr_adam": float(opt.param_groups[1]["lr"]),
-                        "train/total_tokens_seen": tokens_seen,
+                        "train/total_tokens": tokens_seen,
                         "train/tokens_per_second": tokens_per_sec
                     }, 
                     step=step
@@ -260,3 +260,6 @@ def train(
 
         if log_config.profile:
             t_end = _t()
+
+    if dist_info.is_main:
+        wandb.log({"train/oj_total_tokens": max_tokens})
