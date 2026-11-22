@@ -50,6 +50,7 @@ def get_args():
     p.add_argument("--opt", type=str, default="muon")
     p.add_argument("--soap_lr", type=float, default=3e-3)
     p.add_argument("--lr-scheduler", type=str, default="wsd") # "wsd", "cosine", "powercool"
+    p.add_argument("--lr-min-ratio", type=float, default=0.1)
     p.add_argument("--decay-frac", type=float, default=0.2)
     p.add_argument("--powercool-exp", type=float, default=1.2) # exponent for powercool schedule, only needed if lr scheduler is power cool
     p.add_argument("--muon_lr", type=float, default=2.5e-3)
@@ -110,11 +111,11 @@ def main():
         eval_loader = load_dataset(dist_info.rank, dist_info.world_size, split="eval", workers=4)
         
         if args.lr_scheduler == "wsd":
-            shape = wsd_shape(decay_frac=args.decay_frac)
+            shape = wsd_shape(decay_frac=args.decay_frac, min_ratio=args.lr_min_ratio)
         elif args.lr_scheduler == "cosine":
-            shape = cosine_shape()
+            shape = cosine_shape(min=args.lr_min_ratio)
         elif args.lr_scheduler == "powercool":
-            shape = power_cool_shape(decay_frac=args.decay_frac, power=args.powercool_exp)
+            shape = power_cool_shape(decay_frac=args.decay_frac, power=args.powercool_exp, min_ratio=args.lr_min_ratio)
         
         scheduler = TokenLRScheduler(opt, shape, args.max_tokens)
 
