@@ -1,25 +1,32 @@
 #!/bin/bash
 #SBATCH --job-name=data-preprocess
 #SBATCH --account=ACD115198
-#SBATCH --partition=development
+#SBATCH --partition=ct112
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --ntasks-per-node=1
-#SBATCH --cpus-per-task=1
-#SBATCH --time=00:05:00
+#SBATCH --cpus-per-task=112
+#SBATCH --time=1-00:00:00
 #SBATCH --output=logs/%x-%j.out
 
 source $HOME/.bashrc
 
-SRC=/work1/$USER/raw.lance
-DST=/work1/$USER/processed.lance
+# one thread per worker process, otherwise numpy/fasttext/torch each spawn 112 threads
+export OMP_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+export OPENBLAS_NUM_THREADS=1
+
+SRC=/work1/$USER/dolma3_mix_150B_decon
+DST=/work1/$USER/dolma3_mix_150B_scored
 
 echo "========================================"
 echo "Start Time: $(date '+%Y-%m-%d %H:%M:%S')"
 echo "========================================"
 START_TIME=$(date +%s)
 
-uv run --frozen src/predictable_scaling/preprocess.py --src $SRC --dst $DST
+uv run --frozen src/predictable_scaling/preprocess.py \
+    --src $SRC \
+    --dst $DST \
+    --workers $SLURM_CPUS_PER_TASK
 
 END_TIME=$(date +%s)
 echo "========================================"

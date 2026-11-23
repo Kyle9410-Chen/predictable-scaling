@@ -88,6 +88,12 @@ def read(src_dir: str, columns: list[str]|None=None, limit: int|None=1000, offse
         return t
     raise ValueError(f"Unknown format: {fmt!r}")
 
+def iter_batches(src_dir: str, columns: list[str] | None = None, limit: int | None = None,
+                 offset: int | None = None, batch_size: int = 1024):
+    """Lazily yield pyarrow RecordBatches. Use for parallel / vectorized processing."""
+    ds = _open(src_dir)
+    yield from ds.to_batches(columns=columns, limit=limit, offset=offset, batch_size=batch_size)
+
 def iter_rows(src_dir: str, columns: list[str]|None=None, limit: int|None=None, offset: int | None = None, batch_size: int=1024):
     """
     Lazily yield rows as dicts; memory stays at ~one batch regardless of dataset size.
@@ -100,10 +106,8 @@ def iter_rows(src_dir: str, columns: list[str]|None=None, limit: int|None=None, 
         for row in iter_rows(path, columns=["text"], offset=1_000, limit=500):
             ...
     """
-    ds = _open(src_dir)
-    for batch in ds.to_batches(columns=columns, limit=limit, offset=offset, batch_size=batch_size):
-        for row in batch.to_pylist():
-            yield row
+    for batch in iter_batches(src_dir, columns, limit, offset, batch_size):
+        yield from batch.to_pylist()
 
 def write(table: pa.Table, dst_dir: str, mode="create"):
     """
@@ -120,6 +124,12 @@ def write(table: pa.Table, dst_dir: str, mode="create"):
         write(table, "/tmp/my.lance", mode="create")
     """
     lance.write_dataset(table, dst_dir, mode=mode)
+
+def schema(src_dir: str) -> pa.Schema:
+    return _open(src_dir).schema
+
+def count_rows(src_dir: str) -> int:
+    return _open(src_dir).count_rows()
 
 # example of preprocessing
 """

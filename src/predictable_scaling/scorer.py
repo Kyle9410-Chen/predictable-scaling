@@ -1,5 +1,8 @@
 import re
 
+import fasttext
+from huggingface_hub import hf_hub_download
+
 _SENT_RE = re.compile(r"[.!?]+(?:\s+|$)")
 _WORD_RE = re.compile(r"[A-Za-z]+(?:'[A-Za-z]+)?")
 _VOWEL_GROUP_RE = re.compile(r"[aeiouy]+")
@@ -56,3 +59,14 @@ def flesch_reading_ease(text: str) -> float:
     total_words = len(words)
     total_syllables = sum(_count_syllables(w) for w in words)
     return 206.835 - 1.015 * (total_words / total_sentence) - 84.6 * (total_syllables / total_words)
+
+def dolma3_fasttext_quality_classifier(text: str) -> float:
+    """
+    Labels: ['__label__0', '__label__1']
+
+    __label__1 is high quality (positive class) and __label__0 is low quality (negative class)
+    """
+    model_path = hf_hub_download("allenai/dolma3-fasttext-quality-classifier", "model.bin")
+    model = fasttext.load_model(model_path)
+    label, probability = model.predict([text])
+    return label[0], probability[0]

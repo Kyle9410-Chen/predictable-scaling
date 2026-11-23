@@ -12,6 +12,7 @@ dependencies = [
     "boto3>=1.44.6",
     "click>=8.5.0",
     "datasets>=5.1.0",
+    "fasttext>=0.9.3",
     "flock",
     "httpx>=0.28.1",
     "huggingface-hub>=2.4.0",
