@@ -49,6 +49,8 @@ def train(
         dist_info: DistInfo, 
         token_per_step: int,
         max_tokens: int,
+        flops_per_token: float, # for MFU calculation
+        peak_flops: float, # for MFU calculation
         log_config: LogConfig=None,
         ckpt_config: CkptConfig=None,
         branch_config: BranchConfig=None,
@@ -223,6 +225,7 @@ def train(
             now = time.perf_counter()
             tokens_per_sec = (tokens_seen - last_token) / (now - last_time)
             last_time, last_token = time.perf_counter(), tokens_seen
+            mfu = flops_per_token * tokens_per_sec / peak_flops
 
             if dist_info.is_main:
                 wandb.log(
@@ -233,7 +236,8 @@ def train(
                         "train/lr_muon": float(opt.param_groups[0]["lr"]),
                         "train/lr_adam": float(opt.param_groups[1]["lr"]),
                         "train/total_tokens": tokens_seen,
-                        "train/tokens_per_second": tokens_per_sec
+                        "train/tokens_per_second": tokens_per_sec,
+                        "train/mfu": mfu
                     }, 
                     step=step
                 )

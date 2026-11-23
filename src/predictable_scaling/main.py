@@ -12,7 +12,7 @@ from torch.nn.parallel import DistributedDataParallel
 
 from predictable_scaling.optimizer import muon, soap, soap_muon
 from predictable_scaling.dataloader import load_dataset
-from predictable_scaling.model import build_model, save_model
+from predictable_scaling.model import build_model, save_model, predefined_scales
 from predictable_scaling.train import train, LogConfig, BranchConfig, CkptConfig
 from predictable_scaling.scheduler import TokenLRScheduler, cosine_shape, wsd_shape, power_cool_shape
 from predictable_scaling.checkpoint import load_model_weights, load_train_state
@@ -84,6 +84,11 @@ def main():
         if src:
             load_model_weights(src, model, dist_info.device)
 
+        # prepare for MFU calculation
+        cfg = predefined_scales[args.scale]
+        flops_per_token = cfg.flops_per_token(seq_len)
+        peak_flops = 989e12 * dist_info.world_size  # H200 bf16 dense
+
         torch._dynamo.config.ignore_logging_functions.add(logging.Logger.warning_once)
         # raise the recompile limit, since the default 8 is less than the layers required by llama
         torch._dynamo.config.recompile_limit = 64
@@ -153,8 +158,10 @@ def main():
                 profile=args.profile
                 ),
             branch_config=branch_config,
-            ckpt_config=ckpt_config
-            )
+            ckpt_config=ckpt_config,
+            flops_per_token=flops_per_token,
+            peak_flops=peak_flops,
+        )
 
         dist.barrier()
         if dist_info.is_main:
