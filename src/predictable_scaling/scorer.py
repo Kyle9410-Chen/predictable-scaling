@@ -51,6 +51,7 @@ def flesch_reading_ease(text: str) -> float:
     • 50-59: Fairly difficult (College)
     • 30-49: Difficult (College graduate)
     • 0-29: Very difficult (University graduate / professional)
+    • < 0: Extremely dense, containing very long sentences or a high concentration of multisyllabic words
     """
     words = _WORD_RE.findall(text)
     if not words:
