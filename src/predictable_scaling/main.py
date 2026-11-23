@@ -1,5 +1,7 @@
 import os
 import torch
+import wandb
+import time
 import datetime
 import traceback
 import argparse
@@ -16,6 +18,7 @@ from predictable_scaling.model import build_model, save_model, predefined_scales
 from predictable_scaling.train import train, LogConfig, BranchConfig, CkptConfig
 from predictable_scaling.scheduler import TokenLRScheduler, cosine_shape, wsd_shape, power_cool_shape
 from predictable_scaling.checkpoint import load_model_weights, load_train_state
+from predictable_scaling.eval import eval
 
 @dataclass(frozen=True)
 class DistInfo:
@@ -114,7 +117,8 @@ def main():
 
         train_loader = load_dataset("s3://flock-datasets/lab7/ben-kyle/dolma3_mix_150B_paloma_decon", dist_info.rank, dist_info.world_size, split="train", batch_size=args.batch_size, seq_len=seq_len, skip=skip)
         eval_loader = load_dataset("s3://flock-datasets/lab7/ben-kyle/dolma3_mix_150B_paloma_decon", dist_info.rank, dist_info.world_size, split="eval", workers=4)
-        
+        paloma_eval_loader = load_dataset("s3://flock-datasets/paloma", dist_info.rank, dist_info.world_size, split="eval", num_eval_fragment=1142, eval_rows=309383)
+
         if args.lr_scheduler == "wsd":
             shape = wsd_shape(decay_frac=args.decay_frac, min_ratio=args.lr_min_ratio)
         elif args.lr_scheduler == "cosine":
@@ -167,6 +171,18 @@ def main():
         if dist_info.is_main:
             save_model(model, save_dir)
         dist.barrier()
+
+        # paloma eval
+        eval_start = time.perf_counter()
+        paloma_loss = eval(model, paloma_eval_loader, dist_info)
+        eval_end = time.perf_counter()
+        if dist_info.is_main:
+            wandb.log(
+                {
+                    "eval/paloma_ppl": torch.exp(torch.tensor(paloma_loss)),
+                    "eval/paloma_eval_seconds": eval_end - eval_start
+                },
+            )
 
     except BaseException:
         traceback.print_exc()
