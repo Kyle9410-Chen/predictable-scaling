@@ -1,11 +1,11 @@
 #!/bin/bash
 #SBATCH --job-name=data-preprocess
 #SBATCH --account=ACD115198
-#SBATCH --partition=development
+#SBATCH --partition=ct112
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=1
-#SBATCH --mem=32G
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=128G
 #SBATCH --time=08:00:00
 #SBATCH --output=logs/%x-%j.out
 
@@ -20,7 +20,7 @@ export TOKENIZERS_PARALLELISM=false
 export HF_HUB_OFFLINE=1
 
 SRC=/work1/$USER/dolma3_mix_150B_scored_n_tok
-DST=/work1/$USER/dolma3_mix_150B_train
+DST=/work1/$USER/dolma3_mix_150B_flesch_warmup
 
 echo "========================================"
 echo "Start Time: $(date '+%Y-%m-%d %H:%M:%S')"
@@ -30,7 +30,7 @@ START_TIME=$(date +%s)
 uv run --frozen src/predictable_scaling/preprocess.py \
     --src $SRC \
     --dst $DST \
-    --workers $SLURM_CPUS_PER_TASK
+    --workers 8
 
 END_TIME=$(date +%s)
 echo "========================================"

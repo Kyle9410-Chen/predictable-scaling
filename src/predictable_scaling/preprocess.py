@@ -13,15 +13,21 @@ from predictable_scaling.scorer import mtld, flesch_reading_ease
 import pyarrow as pa
 import pyarrow.ipc as ipc, shutil
 import numpy as np
+from lance.fragment import write_fragments
+
 
 # produce train and evaluation split as seperate indices.
 # train split include curriculum part.
 # training should train on train dataset without shuffling
 def build_ordered_schedule(src, key, curriculum_tokens, n_eval, seed: int=0, descending: bool=False):
     ds = lance.dataset(src)
-    t = ds.to_table(columns=[key, "n_tokens"])
+    t = ds.to_table(columns=["mtld", "flesch_reading_ease", "n_tokens"])
     s, n_tokens = t[key].to_numpy(zero_copy_only=False), t["n_tokens"].to_numpy()
-    pos = np.flatnonzero(np.isfinite(s))
+    
+    # keep row which valid in two score. ensure same rows in two curriculum. fair comparison
+    ok = (np.isfinite(t["mtld"].to_numpy(zero_copy_only=False))
+          & np.isfinite(t["flesch_reading_ease"].to_numpy(zero_copy_only=False))) 
+    pos = np.flatnonzero(ok)
     np.random.default_rng(seed).shuffle(pos)
 
     # split train and eval
@@ -56,7 +62,17 @@ def _write_cl(ds, dst, cl, n_tokens, n_cl_frags):
     tok = [int(n_tokens[g].sum()) for g in groups]
     print(f"CL: {len(groups)} frags, tokens/frag min {min(tok):,} max {max(tok):,}")
 
-def _bucket_shuffle(ds, dst, rest, mode, tmp, n_buckets=128, seed=0, rows_per_file=32_768):
+def _gather_bucket(job, dst, schema, rows_per_file):
+    """Shuffle one bucket and write it as uncommitted fragments (runs in a worker process)."""
+    path, perm = job
+    large = pa.schema([f.with_type(pa.large_string()) if f.type == pa.string() else f for f in schema]) # cast into large string to prevent overflow
+    with pa.memory_map(str(path)) as f:
+        t = ipc.open_stream(f).read_all().cast(large).combine_chunks()
+    batches = (b for s in range(0, len(perm), 100_000) for b in t.take(perm[s:s + 100_000]).cast(schema).to_batches())
+    return write_fragments(pa.RecordBatchReader.from_batches(schema, batches), dst, schema=schema,
+                           max_rows_per_file=rows_per_file, data_storage_version="2.2")
+
+def _bucket_shuffle(ds, dst, rest, mode, tmp, n_buckets=128, seed=0, rows_per_file=32_768, workers=1):
     """Uniformly shuffle rows `rest` (sorted positions) into dst using two sequential passes."""
     rng = np.random.default_rng(seed + 1)
     keep = np.zeros(ds.count_rows(), dtype=bool)
@@ -64,47 +80,55 @@ def _bucket_shuffle(ds, dst, rest, mode, tmp, n_buckets=128, seed=0, rows_per_fi
 
     # pass 1: scatter, sequential read of the source
     tmp = Path(tmp)
-    if tmp.exists():
-        print(f"{tmp} exists, skipping pass 1 (resume)", flush=True)
-    else:
-        tmp.mkdir(parents=True, exist_ok=False)
-        sinks = [pa.OSFile(str(tmp / f"b{b:04d}.arrow"), "wb") for b in range(n_buckets)]
+    tmp.mkdir(parents=True, exist_ok=False)
+    sinks = [pa.OSFile(str(tmp / f"b{b:04d}.arrow"), "wb") for b in range(n_buckets)]
+
+    writers = [ipc.new_stream(f, ds.schema) for f in sinks]
+    counts = np.zeros(n_buckets, dtype=int)
+    offset = 0
+    for batch in ds.to_batches(batch_size=65_536):            # in row-position order
+        m = keep[offset:offset + batch.num_rows]
+        offset += batch.num_rows
+        if not m.any():
+            continue
+        batch = batch.filter(pa.array(m))
+        bucket = rng.integers(n_buckets, size=batch.num_rows)
+        counts += np.bincount(bucket, minlength=n_buckets)
+
+        for b in np.unique(bucket):
+            writers[b].write_batch(batch.filter(pa.array(bucket == b)))
     
-        writers = [ipc.new_stream(f, ds.schema) for f in sinks]
-        offset = 0
-        for batch in ds.to_batches(batch_size=65_536):            # in row-position order
-            m = keep[offset:offset + batch.num_rows]
-            offset += batch.num_rows
-            if not m.any():
-                continue
-            batch = batch.filter(pa.array(m))
-            bucket = rng.integers(n_buckets, size=batch.num_rows)
-            for b in np.unique(bucket):
-                writers[b].write_batch(batch.filter(pa.array(bucket == b)))
-        assert offset == len(keep)
-        for w, f in zip(writers, sinks):
-            w.close(); f.close()
+    assert offset == len(keep)
+    for w, f in zip(writers, sinks):
+        w.close(); f.close()
 
     # pass 2: gather, shuffle each bucket in memory, append
-    large = pa.schema([f.with_type(pa.large_string()) if f.type == pa.string() else f for f in ds.schema]) # cast into large string to prevent overflow
-    for b in range(n_buckets):
-        path = tmp / f"b{b:04d}.arrow"
-        with pa.memory_map(str(path)) as f:
-            t = ipc.open_stream(f).read_all().cast(large).combine_chunks()
-        perm = rng.permutation(t.num_rows)
-        batches = (b for s in range(0, len(perm), 100_000) for b in t.take(perm[s:s + 100_000]).cast(ds.schema).to_batches())
-        lance.write_dataset(pa.RecordBatchReader.from_batches(ds.schema, batches), dst, mode=mode, max_rows_per_file=rows_per_file)
-        mode = "append"
-        path.unlink()
-        print(f"bucket {b + 1}/{n_buckets} written", flush=True)
+    jobs = ((tmp / f"b{b:04d}.arrow", rng.permutation(counts[b])) for b in range(n_buckets))
+    frags = []
+
+    with ProcessPoolExecutor(workers) as ex:
+        done = ex.map(
+            partial(_gather_bucket, dst=dst, schema=ds.schema, rows_per_file=rows_per_file),
+            jobs,
+            buffersize=workers
+        )
+        for i, fs in enumerate(done):
+            frags += fs
+            print(f"bucket {i}/{n_buckets} written", flush=True)
+
+    old = lance.dataset(dst) if mode == "append" else None
+    if old is not None: # if appending, include old fragments
+        frags = [f.metadata for f in old.get_fragments()] + frags
+    lance.LanceDataset.commit(dst, lance.LanceOperation.Overwrite(ds.schema, frags),
+                              read_version=old.version if old is not None else 0)
     shutil.rmtree(tmp)
 
 
-def materialize_schedule(src, dst, cl, rest, n_tokens, n_cl_frags, tmp, seed=0):
+def materialize_schedule(src, dst, cl, rest, n_tokens, n_cl_frags, tmp, seed=0, workers=1):
     ds = lance.dataset(src)
     if len(cl):
         _write_cl(ds, dst, cl, n_tokens, n_cl_frags)
-    _bucket_shuffle(ds, dst, rest, "append" if len(cl) else "create", tmp, seed=seed)
+    _bucket_shuffle(ds, dst, rest, "append" if len(cl) else "create", tmp, seed=seed, workers=workers)
 
 def materialize_rows(src, dst, idx, chunk=200_000, rows_per_file=32_768):
     """Plain sequential copy of sorted row positions (used for eval)."""
@@ -236,13 +260,26 @@ if __name__ == "__main__":
     # ---
     # add_token_count(args.src, args.dst, args.workers, limit=args.limit, log_every=30.0)
 
-    # Curriculum fragments
-    # Each dataloader shard will get a fragment with round robin
-    # So smaller fragments means the batch see wider range of difficulty
+    # Train, eval split
     # produce s3://flock-datasets/-projects/28/ben-kyle/dolma3_mix_150B_eval and s3://flock-datasets/-projects/28/ben-kyle/dolma3_mix_150B_train
     # ---
     # val, cl, rest, n_tokens= build_ordered_schedule(args.src, "mtld", 0, 20000)
     # materialize_schedule(args.src, "/work1/benyang0509/dolma3_mix_150B_train", cl, rest, n_tokens,
     #                  n_cl_frags=128, tmp="/work1/benyang0509/_shuffle_tmp")
     # materialize_rows(args.src, "/work1/benyang0509/dolma3_mix_150B_eval", val)
-    
+
+    # Curriculum
+    # Each dataloader shard will get a fragment with round robin
+    # So smaller fragments means the batch see wider range of difficulty
+    # 300M in 30B is 1%, the warmup fraction we use
+    # produce: s3://flock-datasets/-projects/28/ben-kyle/dolma3_mix_150B_mtld_warmup_300M
+    # ---
+    # val, cl, rest, n_tokens= build_ordered_schedule(args.src, "mtld", 300_000_000, 0)
+    # materialize_schedule(args.src, "/work1/benyang0509/dolma3_mix_150B_mtld_warmup_300M", cl, rest, n_tokens,
+    #                  n_cl_frags=128, tmp="/work1/benyang0509/_shuffle_tmp_1")
+
+    # produce: s3://flock-datasets/-projects/28/ben-kyle/dolma3_mix_150B_flesch_warmup_300M
+    # ---
+    # val, cl, rest, n_tokens= build_ordered_schedule(args.src, "flesch_reading_ease", 300_000_000, 0, descending=True)
+    # materialize_schedule(args.src, "/work1/benyang0509/dolma3_mix_150B_flesch_warmup_300M", cl, rest, n_tokens,
+    #                     n_cl_frags=128, tmp="/work1/benyang0509/_shuffle_tmp_2", workers=args.workers)
