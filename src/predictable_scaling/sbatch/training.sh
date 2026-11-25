@@ -25,6 +25,9 @@ export NCCL_SOCKET_IFNAME=lo
 export PYTHONUNBUFFERED=1
 export OMP_NUM_THREADS=1
 
+# Don't make too many request to s3
+export LANCE_IO_THREADS=8
+
 uv sync --frozen
 
 echo "host: $(hostname) | start: $(date)"
@@ -49,6 +52,9 @@ uv run --frozen --env-file .env torchrun --nproc-per-node=8 \
     --lr-scheduler powercool \
     --powercool-exp 2 \
     --wd 0.1 \
+    --hp-config configs/hp/150M-soap-muon.yaml \
+    --dataset "s3://flock-datasets/-projects/28/ben-kyle/dolma3_mix_150B_scored" \
+    --dataset-version 2 \
     --save-dir "/work/${USER}/predictable-scaling/models" \
     "$@"
 
