@@ -80,6 +80,7 @@ def get_args():
     # dataset
     p.add_argument("--dataset", type=str, default="s3://flock-datasets/-projects/28/ben-kyle/dolma3_mix_150B_scored")
     p.add_argument("--dataset-version", type=int, default=2)
+    p.add_argument("--no-shuffle", action="store_true")
 
     return p.parse_args()
 
@@ -153,7 +154,8 @@ def main():
 
         train_loader = load_dataset(args.dataset, dist_info.rank, dist_info.world_size, split="train", 
                                     batch_size=args.batch_size, seq_len=seq_len, skip=skip, version=args.dataset_version,
-                                    workers=4)
+                                    workers=4, shuffle=not args.no_shuffle,
+                                    num_eval_fragment=0 if args.no_shuffle else 2)
 
         if args.lr_scheduler == "wsd":
             shape = wsd_shape(decay_frac=args.decay_frac, min_ratio=args.lr_min_ratio)
