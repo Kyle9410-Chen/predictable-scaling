@@ -1,3 +1,4 @@
+import time
 from predictable_scaling.dataloader import load_dataset
 import lance
 import pyarrow as pa
@@ -33,23 +34,60 @@ def download(src_uri: str, version: int, dst_dir: str, columns: list[str], mode:
     out = lance.write_dataset(_stream(src, columns=columns, limit=limit), dst_dir, mode=mode)
     return out.count_rows()
 
-def upload(src_dir: str, dst_uri: str, mode="create") -> int:
+def upload(src_dir: str, dst_uri: str, mode="create", threads: int = 4) -> int:
     """
-    Upload local dataset to s3
+    Copy data files as they are (fragments kept), then commit them as one new version.
+    Rerun after an interruption: finished files are skipped.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+    from botocore.config import Config
+    from boto3.s3.transfer import TransferConfig
 
-    Args:
-        src_dir (str): local dataset path
-        dst_uri (str): s3 path to upload
-        mode (str): "create" | "overwrite" | "append"
-    
-    Returns:
-        int: uploaded dataset version
-    """
-    s3.get_process()
-    src = lance.dataset(str(src_dir))
-    out = lance.write_dataset(_stream(src), dst_uri, mode=mode)
+    if mode not in ("create", "overwrite"):
+        raise ValueError("mode must be create or overwrite")
+    s3.get_process()                                  # credentials for lance
+    c = s3.credentials().boto3_client(config=Config(
+        read_timeout=300, max_pool_connections=32,
+        retries={"max_attempts": 10, "mode": "standard"}))               # credentials for the file copy
+    transfer = TransferConfig(max_concurrency=4, multipart_chunksize=32 * 2**20)
+    src_path, src = Path(src_dir), lance.dataset(str(src_dir))
+    dst_uri = dst_uri.rstrip("/")
+    bucket, _, prefix = dst_uri.removeprefix("s3://").partition("/")
+
+    pages = c.get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix=prefix + "/")
+    have = {o["Key"]: o["Size"] for p in pages for o in p.get("Contents", [])}
+    exists = any("/_versions/" in k for k in have)
+    if exists and mode == "create":
+        raise FileExistsError(f"{dst_uri} exists, use mode=overwrite")
+    read_version = lance.dataset(dst_uri).version if exists else 0
+
+    def put(name, tries=5):
+        f, key = src_path / name, f"{prefix}/{name}"
+        if have.get(key) == f.stat().st_size:
+            return
+        for k in range(tries):
+            try:
+                return c.upload_file(str(f), bucket, key, Config=transfer)
+            except Exception as e:
+                if k == tries - 1:
+                    raise
+                print(f"retry {name}: {type(e).__name__}", flush=True)
+                time.sleep(30 * (k + 1))
+
+    fragments = [f.metadata for f in src.get_fragments()]
+    names = [f"data/{d.path}" for f in fragments for d in f.files]
+    with ThreadPoolExecutor(threads) as ex:
+        for i, _ in enumerate(ex.map(put, names), 1):
+            if i % 50 == 0 or i == len(names):
+                print(f"{i}/{len(names)} files", flush=True)
+    if (src_path / "README.md").is_file():
+        c.upload_file(str(src_path / "README.md"), bucket, f"{prefix}/README.md")
+
+    # readers switch to the new data only here
+    op = lance.LanceOperation.Overwrite(src.schema, fragments)
+    out = lance.LanceDataset.commit(dst_uri, op, read_version=read_version)
+    assert out.count_rows() == src.count_rows()
     print(f"uploaded {out.count_rows()} rows to {dst_uri} @ v{out.version}")
-
     return out.version
 
 def _open(src: str, version: int | None = None) -> lance.LanceDataset:
