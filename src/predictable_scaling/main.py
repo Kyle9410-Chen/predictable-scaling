@@ -1,5 +1,7 @@
 import os
 import torch
+import wandb
+import time
 import datetime
 import traceback
 import argparse
@@ -13,10 +15,11 @@ from torch.nn.parallel import DistributedDataParallel
 from predictable_scaling.optimizer import muon, soap, soap_muon, muon_from_specs
 from predictable_scaling.hparams import load_hp_config, resolve_groups, describe
 from predictable_scaling.dataloader import load_dataset
-from predictable_scaling.model import build_model, save_model
+from predictable_scaling.model import build_model, save_model, predefined_scales
 from predictable_scaling.train import train, LogConfig, BranchConfig, CkptConfig
 from predictable_scaling.scheduler import TokenLRScheduler, cosine_shape, wsd_shape, power_cool_shape
 from predictable_scaling.checkpoint import load_model_weights, load_train_state
+from predictable_scaling.eval import eval
 
 @dataclass(frozen=True)
 class DistInfo:
@@ -51,6 +54,7 @@ def get_args():
     p.add_argument("--opt", type=str, default="muon")
     p.add_argument("--soap_lr", type=float, default=3e-3)
     p.add_argument("--lr-scheduler", type=str, default="wsd") # "wsd", "cosine", "powercool"
+    p.add_argument("--lr-min-ratio", type=float, default=0.1)
     p.add_argument("--decay-frac", type=float, default=0.2)
     p.add_argument("--powercool-exp", type=float, default=1.2) # exponent for powercool schedule, only needed if lr scheduler is power cool
     p.add_argument("--muon_lr", type=float, default=2.5e-3)
@@ -88,6 +92,11 @@ def main():
         if src:
             load_model_weights(src, model, dist_info.device)
 
+        # prepare for MFU calculation
+        cfg = predefined_scales[args.scale]
+        flops_per_token = cfg.flops_per_token(seq_len)
+        peak_flops = 989e12 * dist_info.world_size  # H200 bf16 dense
+
         torch._dynamo.config.ignore_logging_functions.add(logging.Logger.warning_once)
         # raise the recompile limit, since the default 8 is less than the layers required by llama
         torch._dynamo.config.recompile_limit = 64
@@ -122,15 +131,16 @@ def main():
             start_state, progress = load_train_state(src, opt, dist_info, model)
             skip = {shard: frag + 1 for shard, frag in progress.items()}
 
-        train_loader = load_dataset(dist_info.rank, dist_info.world_size, split="train", batch_size=args.batch_size, seq_len=seq_len, skip=skip)
-        eval_loader = load_dataset(dist_info.rank, dist_info.world_size, split="eval", workers=4)
-        
+        train_loader = load_dataset("s3://flock-datasets/lab7/ben-kyle/dolma3_mix_150B_paloma_decon", dist_info.rank, dist_info.world_size, split="train", batch_size=args.batch_size, seq_len=seq_len, skip=skip)
+        eval_loader = load_dataset("s3://flock-datasets/lab7/ben-kyle/dolma3_mix_150B_paloma_decon", dist_info.rank, dist_info.world_size, split="eval", workers=4)
+        paloma_eval_loader = load_dataset("s3://flock-datasets/paloma", dist_info.rank, dist_info.world_size, split="eval", num_eval_fragment=1142, eval_rows=309383)
+
         if args.lr_scheduler == "wsd":
-            shape = wsd_shape(decay_frac=args.decay_frac)
+            shape = wsd_shape(decay_frac=args.decay_frac, min_ratio=args.lr_min_ratio)
         elif args.lr_scheduler == "cosine":
-            shape = cosine_shape()
+            shape = cosine_shape(min=args.lr_min_ratio)
         elif args.lr_scheduler == "powercool":
-            shape = power_cool_shape(decay_frac=args.decay_frac, power=args.powercool_exp)
+            shape = power_cool_shape(decay_frac=args.decay_frac, power=args.powercool_exp, min_ratio=args.lr_min_ratio)
         
         scheduler = TokenLRScheduler(opt, shape, args.max_tokens)
 
@@ -172,13 +182,27 @@ def main():
                 profile=args.profile
                 ),
             branch_config=branch_config,
-            ckpt_config=ckpt_config
-            )
+            ckpt_config=ckpt_config,
+            flops_per_token=flops_per_token,
+            peak_flops=peak_flops,
+        )
 
         dist.barrier()
         if dist_info.is_main:
             save_model(model, save_dir)
         dist.barrier()
+
+        # paloma eval
+        eval_start = time.perf_counter()
+        paloma_loss = eval(model, paloma_eval_loader, dist_info)
+        eval_end = time.perf_counter()
+        if dist_info.is_main:
+            wandb.log(
+                {
+                    "eval/paloma_ppl": torch.exp(torch.tensor(paloma_loss)),
+                    "eval/paloma_eval_seconds": eval_end - eval_start
+                },
+            )
 
     except BaseException:
         traceback.print_exc()

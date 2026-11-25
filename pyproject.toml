@@ -9,15 +9,19 @@ authors = [
 requires-python = ">=3.14"
 dependencies = [
     "accelerate>=1.15.0",
+    "boto3>=1.44.6",
     "click>=8.5.0",
     "datasets>=5.1.0",
+    "fasttext>=0.9.3",
     "flock",
     "httpx>=0.28.1",
     "huggingface-hub>=2.4.0",
     "kernels==0.17.2",
     "liger-kernel>=0.8.5",
+    "matplotlib>=3.11.2",
     "muonium>=0.2.0",
     "pylance>=14.0.2",
+    "sentencepiece>=0.2.3",
     "torch>=2.15.0",
     "transformers>=5.22.1",
     "wandb>=0.31.0",
@@ -31,4 +35,4 @@ requires = ["uv_build>=0.12.18,<0.13.0"]
 build-backend = "uv_build"
 
 [tool.uv.sources]
-flock = { git = "https://github.com/cerulean-works/flock.git", rev = "2942f4026aa141e11f748c0ef4df4ca782eb2629" }
+flock = { git = "https://github.com/cerulean-works/flock.git", rev = "809e7a2f0d949d1e9873e36e20b24f6c4e71457d" }

@@ -39,6 +39,10 @@ class ModelScaleConfig:
 
         return embedding + self.layers * block + rms_norm
 
+    def flops_per_token(self, seq_len):
+        attn_flops = 6 * self.layers * self.heads * self.HEAD_DIM * seq_len
+        return 6 * self.total_params() + attn_flops
+
 predefined_scales = {
     "150M": ModelScaleConfig(6, 768, 3072, 12, 3),
     "300M": ModelScaleConfig(9, 1024, 5184, 16, 4),
