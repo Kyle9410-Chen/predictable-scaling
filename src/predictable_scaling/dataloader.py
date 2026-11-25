@@ -28,11 +28,11 @@ class SequentialLanceDataset(IterableDataset):
 
     def _read(self, fragments):
         for fragment in fragments:
-            for batch in fragment.to_batches(columns = [self.column], batch_size = self.read_batch_size):
+            for batch in fragment.to_batches(columns = [self.column], batch_size = self.read_batch_size, io_buffer_size=128 * 1024 * 1024):
                 yield from batch.to_pylist()
     
     def _rows(self, shard, num_shards):
-        ds = lance.dataset(self.uri, version=self.version)
+        ds = lance.dataset(self.uri, version=self.version, storage_options={"client_max_retries": "10", "client_retry_timeout": "600"})
         fragments = ds.get_fragments()
         random.Random(self.seed).shuffle(fragments)
 
@@ -150,7 +150,7 @@ def packed_collate(items):
     }
 
 def load_dataset(uri: str, rank: int, world_size: int, split: str="train", workers: int=8, batch_size=4, seq_len=8192, skip: dict[int, int] = None,
-                num_eval_fragment=2, eval_rows=2048) -> DataLoader:
+                num_eval_fragment=2, eval_rows=2048, version=1) -> DataLoader:
     s3.get_process(read_only=True)
 
     tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-3.2-1B")
@@ -167,7 +167,8 @@ def load_dataset(uri: str, rank: int, world_size: int, split: str="train", worke
                 world_size=1,
                 split="eval",
                 num_eval_fragment=num_eval_fragment,
-                eval_rows=eval_rows
+                eval_rows=eval_rows,
+                version=version,
             )
         rows = list(ds)
         sampler = DistributedSampler(rows, num_replicas=world_size, rank=rank, shuffle=False)
@@ -190,7 +191,8 @@ def load_dataset(uri: str, rank: int, world_size: int, split: str="train", worke
                 split="train",
                 skip=skip,
                 num_eval_fragment=num_eval_fragment,
-                eval_rows=eval_rows
+                eval_rows=eval_rows,
+                version=version
             )
 
         ds = PackedDataset(base, tokenizer, seq_len)

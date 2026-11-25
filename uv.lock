@@ -1,5 +1,5 @@
 version = 1
-revision = 5
+revision = 3
 requires-python = ">=3.14"
 resolution-markers = [
     "sys_platform == 'win32'",
@@ -698,7 +698,27 @@ wheels = [
 [[package]]
 name = "flock"
 version = "0.1.0"
-source = { git = "https://github.com/cerulean-works/flock.git?rev=809e7a2f0d949d1e9873e36e20b24f6c4e71457d#809e7a2f0d949d1e9873e36e20b24f6c4e71457d" }
+source = { git = "https://github.com/cerulean-works/flock.git?rev=514b9e493327592089763de4ae678fe7b6b41489#514b9e493327592089763de4ae678fe7b6b41489" }
+dependencies = [
+    { name = "accelerate" },
+    { name = "boto3" },
+    { name = "click" },
+    { name = "datasets" },
+    { name = "httpx" },
+    { name = "huggingface-hub" },
+    { name = "numpy" },
+    { name = "pyarrow" },
+    { name = "pydantic" },
+    { name = "pylance" },
+    { name = "safetensors" },
+    { name = "sentencepiece" },
+    { name = "tokenizers" },
+    { name = "torch" },
+    { name = "tqdm" },
+    { name = "transformers" },
+    { name = "typing-extensions" },
+    { name = "wandb" },
+]
 
 [[package]]
 name = "fonttools"
@@ -1881,7 +1901,7 @@ requires-dist = [
     { name = "click", specifier = ">=8.5.0" },
     { name = "datasets", specifier = ">=5.1.0" },
     { name = "fasttext", specifier = ">=0.9.3" },
-    { name = "flock", git = "https://github.com/cerulean-works/flock.git?rev=809e7a2f0d949d1e9873e36e20b24f6c4e71457d" },
+    { name = "flock", git = "https://github.com/cerulean-works/flock.git?rev=514b9e493327592089763de4ae678fe7b6b41489" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "huggingface-hub", specifier = ">=2.4.0" },
     { name = "kernels", specifier = "==0.17.2" },

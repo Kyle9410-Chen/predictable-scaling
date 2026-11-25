@@ -35,4 +35,4 @@ requires = ["uv_build>=0.12.18,<0.13.0"]
 build-backend = "uv_build"
 
 [tool.uv.sources]
-flock = { git = "https://github.com/cerulean-works/flock.git", rev = "809e7a2f0d949d1e9873e36e20b24f6c4e71457d" }
+flock = { git = "https://github.com/cerulean-works/flock.git", rev = "514b9e493327592089763de4ae678fe7b6b41489" }
