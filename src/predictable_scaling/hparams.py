@@ -10,6 +10,8 @@ The YAML holds final values only; nothing is derived here. Layout::
 
 A group key overrides the algorithm default. ``one_minus_betas: [b1, b2]`` may be
 given instead of ``betas`` so the 1-beta columns of the transfer sheet can be pasted.
+An optional ``soap: {shampoo_beta: 0.95}`` section (or ``one_minus_shampoo_beta``) holds the
+SOAP hyperparameters; it is only used with ``--opt soap-muon``.
 CLI overrides: ``--hp groups.embed.lr=3e-3 --hp adamw.wd=0.05``.
 """
 
@@ -108,6 +110,23 @@ def resolve_groups(cfg: dict, model) -> list[dict]:
 
         specs.append({"name": g, "algorithm": algo, "param_names": assign[g], **hp})
     return specs
+
+
+SOAP_KEYS = {"shampoo_beta", "one_minus_shampoo_beta", "precondition_frequency", "max_precond_dim"}
+
+def resolve_soap(cfg: dict) -> dict:
+    """SOAP kwargs from the optional ``soap`` section; missing keys keep SOAP's defaults."""
+    hp = {k: _num(v) for k, v in (cfg.get("soap") or {}).items()}
+    bad = set(hp) - SOAP_KEYS
+    if bad:
+        raise ValueError(f"soap: unknown keys {sorted(bad)}")
+    if "one_minus_shampoo_beta" in hp:
+        if "shampoo_beta" in hp:
+            raise ValueError("soap: set shampoo_beta or one_minus_shampoo_beta, not both")
+        hp["shampoo_beta"] = 1.0 - hp.pop("one_minus_shampoo_beta")
+    if not 0.0 <= hp.get("shampoo_beta", 0.95) < 1.0:
+        raise ValueError(f"soap: shampoo_beta {hp['shampoo_beta']} outside [0, 1)")
+    return hp
 
 
 def describe(specs: list[dict]) -> dict:

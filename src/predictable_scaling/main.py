@@ -12,8 +12,8 @@ import torch.distributed as dist
 from dataclasses import dataclass
 from torch.nn.parallel import DistributedDataParallel
 
-from predictable_scaling.optimizer import muon, soap, soap_muon, muon_from_specs
-from predictable_scaling.hparams import load_hp_config, resolve_groups, describe
+from predictable_scaling.optimizer import muon, soap, soap_muon, muon_from_specs, soap_muon_from_specs
+from predictable_scaling.hparams import load_hp_config, resolve_groups, resolve_soap, describe
 from predictable_scaling.dataloader import load_dataset
 from predictable_scaling.model import build_model, save_model, predefined_scales
 from predictable_scaling.train import train, LogConfig, BranchConfig, CkptConfig
@@ -68,7 +68,7 @@ def get_args():
     p.add_argument("--save-dir", type=str, default="models")
     p.add_argument("--profile", action="store_true")
 
-    # per-module hyperparameters (muon only). when set, replaces the --adam_* / --muon_* / --wd flags
+    # per-module hyperparameters (muon / soap-muon). when set, replaces the --adam_* / --muon_* / --wd flags
     p.add_argument("--hp-config", type=str, default="") # yaml, see hparams.py
     p.add_argument("--hp", action="append", default=[]) # repeatable dotted override, e.g. --hp groups.embed.lr=3e-3
 
@@ -108,10 +108,15 @@ def main():
          
         hp_specs = None
         if args.hp_config:
-            if args.opt != "muon":
-                raise ValueError("--hp-config is only supported with --opt muon")
-            hp_specs = resolve_groups(load_hp_config(args.hp_config, args.hp), model.module)
-            opt = muon_from_specs(model, hp_specs)
+            if args.opt not in ("muon", "soap-muon"):
+                raise ValueError("--hp-config is only supported with --opt muon or soap-muon")
+            hp_cfg = load_hp_config(args.hp_config, args.hp)
+            hp_specs = resolve_groups(hp_cfg, model.module)
+            soap_hp = resolve_soap(hp_cfg) if args.opt == "soap-muon" else {}
+            if args.opt == "soap-muon":
+                opt = soap_muon_from_specs(model, hp_specs, soap_hp)
+            else:
+                opt = muon_from_specs(model, hp_specs)
             if dist_info.is_main:
                 for name, hp in describe(hp_specs).items():
                     print(f"hp group {name}: {hp}")
@@ -149,6 +154,8 @@ def main():
         }
         if hp_specs is not None:
             run_config["hp"] = describe(hp_specs) # resolved values, filterable as hp.<group>.<key>
+            if soap_hp:
+                run_config["hp"]["soap"] = soap_hp
             for k in ("adam_lr", "adam_beta1", "adam_beta2", "adam_eps", "muon_lr", "muon_momentum", "wd"):
                 run_config.pop(k) # unused with --hp-config; drop so they can't be mistaken for real values
 

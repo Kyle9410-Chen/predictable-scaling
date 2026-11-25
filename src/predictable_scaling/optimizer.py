@@ -127,6 +127,20 @@ def soap_muon(model: AutoModelForCausalLM, shampoo_beta=0.95, adam_lr=1e-3, adam
 
     return optimizer
 
+def soap_muon_from_specs(model, specs: list[dict], soap_hp: dict) -> "SOAP":
+    """SOAP around an (undistributed) Muon built from hparams.resolve_groups() output.
+    model is the DDP wrapper."""
+    named = dict(model.module.named_parameters())
+    groups = []
+    for s in specs:
+        g = {k: v for k, v in s.items() if k not in ("name", "param_names")}
+        g["params"] = [named[n] for n in s["param_names"]]
+        groups.append(g)
+    inner = Muon(groups)
+    for g, s in zip(inner.param_groups, specs): # for lr logging by name
+        g["name"] = s["name"]
+    return SOAP(inner=inner, **soap_hp)
+
 class Basis:
     def __init__(self, QL: Tensor, QR: Tensor):
         self.QL: Tensor = QL
