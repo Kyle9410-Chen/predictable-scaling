@@ -1,11 +1,12 @@
 #!/bin/bash
 #SBATCH --job-name=data-preprocess
 #SBATCH --account=ACD115198
-#SBATCH --partition=ct112
+#SBATCH --partition=development
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=112
-#SBATCH --time=1-00:00:00
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=32G
+#SBATCH --time=08:00:00
 #SBATCH --output=logs/%x-%j.out
 
 source $HOME/.bashrc
@@ -14,9 +15,12 @@ source $HOME/.bashrc
 export OMP_NUM_THREADS=1
 export MKL_NUM_THREADS=1
 export OPENBLAS_NUM_THREADS=1
+export TOKENIZERS_PARALLELISM=false
+# compute nodes have no network; use the HF cache in $HOME directly
+export HF_HUB_OFFLINE=1
 
-SRC=/work1/$USER/dolma3_mix_150B_decon
-DST=/work1/$USER/dolma3_mix_150B_scored
+SRC=/work1/$USER/dolma3_mix_150B_scored_n_tok
+DST=/work1/$USER/dolma3_mix_150B_train
 
 echo "========================================"
 echo "Start Time: $(date '+%Y-%m-%d %H:%M:%S')"
