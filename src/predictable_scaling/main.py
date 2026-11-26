@@ -224,6 +224,7 @@ def main():
         if dist_info.is_main:
             wandb.log(scores)
             wandb.log({"eval/paloma_eval_seconds": eval_end - eval_start})
+            wandb.summary["paloma_bpb"] = scores["eval/paloma_bpb"]
 
     except BaseException:
         traceback.print_exc()

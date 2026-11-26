@@ -277,4 +277,5 @@ def train(
             t_end = _t()
 
     if dist_info.is_main:
-        wandb.log({"train/oj_total_tokens": max_tokens})
+        wandb.summary["oj_total_tokens"] = max_tokens
+        wandb.summary["total_tokens"] = tokens_seen
