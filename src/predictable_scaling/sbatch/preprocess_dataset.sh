@@ -30,7 +30,9 @@ START_TIME=$(date +%s)
 uv run --frozen src/predictable_scaling/preprocess.py \
     --src $SRC \
     --dst $DST \
-    --workers 8
+    --workers 8 \
+    --cl-tokens 300000000 \
+    "$@"
 
 END_TIME=$(date +%s)
 echo "========================================"

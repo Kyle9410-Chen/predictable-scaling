@@ -247,6 +247,11 @@ def get_args():
     p.add_argument("--dst")
     p.add_argument("--workers", type=int, default=1)
     p.add_argument("--limit", type=int)
+    p.add_argument("--descending", action="store_true")
+    p.add_argument("--key", default="flesch_reading_ease")
+    p.add_argument("--cl-tokens", required=True, type=float)
+    p.add_argument("--tmp-dir", default="/work1/$USER/_shuffle_tmp")
+
     return p.parse_args()
 
 if __name__ == "__main__":
@@ -283,3 +288,8 @@ if __name__ == "__main__":
     # val, cl, rest, n_tokens= build_ordered_schedule(args.src, "flesch_reading_ease", 300_000_000, 0, descending=True)
     # materialize_schedule(args.src, "/work1/benyang0509/dolma3_mix_150B_flesch_warmup_300M", cl, rest, n_tokens,
     #                     n_cl_frags=128, tmp="/work1/benyang0509/_shuffle_tmp_2", workers=args.workers)
+
+    print(args)
+    val, cl, rest, n_tokens= build_ordered_schedule(args.src, args.key, args.cl_tokens, 0, descending=args.descending)
+    materialize_schedule(args.src, args.dst, cl, rest, n_tokens,
+                        n_cl_frags=128, tmp=args.tmp_dir, workers=args.workers)
