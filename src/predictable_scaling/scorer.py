@@ -2,6 +2,9 @@ import re
 
 import fasttext
 from huggingface_hub import hf_hub_download
+import numpy as np
+import torch
+from transformers import AutoTokenizer, AutoModelForSequenceClassification
 
 _SENT_RE = re.compile(r"[.!?]+(?:\s+|$)")
 _WORD_RE = re.compile(r"[A-Za-z]+(?:'[A-Za-z]+)?")
@@ -71,3 +74,40 @@ def dolma3_fasttext_quality_classifier(text: str) -> float:
     model = fasttext.load_model(model_path)
     label, probability = model.predict([text])
     return label[0], probability[0]
+
+FINEWEB_EDU = "HuggingFaceFW/fineweb-edu-classifier"
+
+class FineWebEduScorer:
+    """
+    Score Interpretation (regression, ~0-5)
+
+    • 0-1: no / little educational value
+    • 3+ : threshold FineWeb-Edu uses to keep a document
+    • 5  : highly educational
+    """
+    def __init__(self, device="cuda", batch_size=256, max_length=512,
+                 max_chars=6000, dtype=torch.bfloat16):
+        self.tok = AutoTokenizer.from_pretrained(FINEWEB_EDU)
+        self.model = (AutoModelForSequenceClassification
+                      .from_pretrained(FINEWEB_EDU, torch_dtype=dtype)
+                      .to(device).eval())
+        self.device, self.bs = device, batch_size
+        self.max_length, self.max_chars = max_length, max_chars
+
+    @torch.inference_mode()
+    def __call__(self, texts: list[str]) -> np.ndarray:
+        # 512 tokens ≈ 2-3k chars; cutting long docs first makes tokenization much cheaper
+        texts = [t[:self.max_chars] for t in texts]
+        ids = self.tok(texts, truncation=True, max_length=self.max_length)["input_ids"]
+        order = np.argsort([len(x) for x in ids])          # length-sort -> minimal padding
+        out = np.empty(len(texts), dtype=np.float32)
+        for s in range(0, len(order), self.bs):
+            idx = order[s:s + self.bs]
+            enc = self.tok.pad({"input_ids": [ids[i] for i in idx]},
+                               return_tensors="pt").to(self.device)
+            out[idx] = self.model(**enc).logits.squeeze(-1).float().cpu().numpy()
+        return out
+
+def fineweb_edu_int(score: np.ndarray) -> np.ndarray:
+    """Same rounding as the model card: int(round(clamp(score, 0, 5)))."""
+    return np.clip(np.round(score), 0, 5).astype(np.int8)
