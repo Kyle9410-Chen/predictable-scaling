@@ -78,8 +78,8 @@ def get_args():
     p.add_argument("--branch-from", type=str, default="") # the checkpoint you want to branch from
 
     # dataset
-    p.add_argument("--dataset", type=str, default="s3://flock-datasets/-projects/28/ben-kyle/dolma3_mix_150B_scored")
-    p.add_argument("--dataset-version", type=int, default=2)
+    p.add_argument("--dataset", type=str, default="s3://flock-datasets/-projects/28/ben-kyle/dolma3_mix_150B_train")
+    p.add_argument("--dataset-version", type=int, default=3)
     p.add_argument("--no-shuffle", action="store_true")
 
     return p.parse_args()
