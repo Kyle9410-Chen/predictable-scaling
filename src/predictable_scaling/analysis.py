@@ -2,7 +2,7 @@ from predictable_scaling.dataset_utils import read
 import numpy as np
 import matplotlib.pyplot as plt
 
-COLUMNS = ["mtld", "flesch_reading_ease", "n_tokens"]
+COLUMNS = ["mtld", "flesch_reading_ease", "n_tokens", "fineweb_edu", "fineweb_edu_int"]
 
 def load(src):
     t = read(src, columns=COLUMNS, limit=None, max_rows=None, fmt="arrow")
@@ -12,7 +12,8 @@ def load(src):
         out[c] = x[np.isfinite(x)]
     return out
 
-RANGE_PCT = {"mtld": (0, 99.5), "flesch_reading_ease": (5, 99.5), "n_tokens": (0, 80)}
+RANGE_PCT = {"mtld": (0, 99.5), "flesch_reading_ease": (5, 99.5), "n_tokens": (0, 80),
+             "fineweb_edu": (0, 100), "fineweb_edu_int": (0, 100)}
 
 def plot(data, out):
     fig, axes = plt.subplots(1, len(data), figsize=(13, 4.5))
