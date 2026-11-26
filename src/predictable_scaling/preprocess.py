@@ -7,9 +7,11 @@ import datetime
 
 import lance
 from transformers import AutoTokenizer
+from itertools import repeat
+import torch.multiprocessing as mp
 
-from predictable_scaling.dataset_utils import iter_batches, count_rows, schema as get_schema
-from predictable_scaling.scorer import mtld, flesch_reading_ease
+from predictable_scaling.dataset_utils import iter_batches, count_rows, schema as get_schema, _open
+from predictable_scaling.scorer import mtld, flesch_reading_ease, FineWebEduScorer, fineweb_edu_int
 import pyarrow as pa
 import pyarrow.ipc as ipc, shutil
 import numpy as np
@@ -216,6 +218,45 @@ def _log_progress(results, total: int | None, every: float = 30.0):
             yield out_batch
     report(final=True)
 
+def _fineweb_edu_worker(rank, frag_ids, src, dst, schema, batch_size, read_batch, rows_per_file):
+    import torch
+    torch.cuda.set_device(rank)
+    scorer = FineWebEduScorer(device=f"cuda:{rank}", batch_size=batch_size)
+    ds = _open(src)
+
+    def batches():
+        done = 0
+        for fid in frag_ids:
+            for b in ds.get_fragment(fid).to_batches(batch_size=read_batch):
+                s = scorer(b.column("text").to_pylist())
+                done += b.num_rows
+                yield pa.RecordBatch.from_arrays(
+                    [*b.columns, pa.array(s, pa.float32()), pa.array(fineweb_edu_int(s))],
+                    schema=schema)
+            print(f"[gpu{rank}] frag {fid} done, {done:,} rows", flush=True)
+
+    return write_fragments(pa.RecordBatchReader.from_batches(schema, batches()), dst,
+                           schema=schema, max_rows_per_file=rows_per_file,
+                           data_storage_version="2.2")
+
+def score_fineweb_edu(src, dst, n_gpus=None, batch_size=256, read_batch=8192,
+                      rows_per_file=32_768):
+    import torch
+    n_gpus = n_gpus or torch.cuda.device_count()
+    ds = _open(src)
+    schema = (ds.schema.append(pa.field("fineweb_edu", pa.float32()))
+              .append(pa.field("fineweb_edu_int", pa.int8())))
+    frag_ids = [f.fragment_id for f in ds.get_fragments()]
+    shards = [[int(i) for i in s] for s in np.array_split(frag_ids, n_gpus)]
+
+    with ProcessPoolExecutor(n_gpus, mp_context=mp.get_context("spawn")) as ex:
+        results = ex.map(_fineweb_edu_worker, range(n_gpus), shards, repeat(src), repeat(dst),
+               repeat(schema), repeat(batch_size), repeat(read_batch), repeat(rows_per_file))
+        frags = [f for fs in results for f in fs]
+
+    lance.LanceDataset.commit(dst, lance.LanceOperation.Overwrite(schema, frags), read_version=0)
+    return lance.dataset(dst)
+
 def write_readme(dst, *, src, key, descending, cl_frac, n_cl, n_train, n_val, seed, val_uri, rows_per_file):
     meta = {
         "source": src, "sort_key": key, "descending": descending,
@@ -259,6 +300,10 @@ if __name__ == "__main__":
     # add token count to s3://flock-datasets/lab7/ben-kyle/dolma3_mix_150B_scored
     # ---
     # add_token_count(args.src, args.dst, args.workers, limit=args.limit, log_every=30.0)
+
+    # add fineweb edu
+    # ---
+    score_fineweb_edu(args.src, args.dst, n_gpus=args.workers)
 
     # Train, eval split
     # produce s3://flock-datasets/-projects/28/ben-kyle/dolma3_mix_150B_eval and s3://flock-datasets/-projects/28/ben-kyle/dolma3_mix_150B_train
