@@ -1,0 +1,18 @@
+# 150M / 30B row of the "hyper parameter transfer" sheet (= current baseline).
+# Final values only; columns from sheet "Muon fixed batchsize".
+# Write floats with a dot or as-is: "1e-8" is accepted (coerced), but prefer 1.0e-8.
+
+muon:  {momentum: 0.95, wd: 0.1}                          # K, J
+adamw: {one_minus_betas: [0.1, 0.001], wd: 0.1}           # R, S (1-beta, pasted as-is), T
+
+# first regex match wins, top to bottom; every parameter must match exactly one group
+groups:
+  attn_qo:     {match: 'self_attn\.(q|o)_proj', algorithm: muon,  lr: 2.5e-3}             # F
+  attn_kv:     {match: 'self_attn\.(k|v)_proj', algorithm: muon,  lr: 2.5e-3}             # G
+  mlp_up:      {match: 'mlp\.(gate|up)_proj',   algorithm: muon,  lr: 2.5e-3}             # H
+  mlp_down:    {match: 'mlp\.down_proj',        algorithm: muon,  lr: 2.5e-3}             # I
+  # embed_tokens is tied with lm_head: ONE lr/eps for both. Sheet L/M and O/Q disagree
+  # beyond 150M; decide which column (or a test of both) per scale.
+  embed:       {match: 'embed_tokens',          algorithm: adamw, lr: 1.2e-3, eps: 1.0e-8} # L or M, O or Q
+  final_norm:  {match: '^model\.norm\.',        algorithm: adamw, lr: 1.2e-3, eps: 1.0e-8} # L, Q
+  hidden_norm: {match: 'layernorm',             algorithm: adamw, lr: 1.2e-3, eps: 1.0e-8} # N, P

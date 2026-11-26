@@ -6,6 +6,9 @@ from typing import Literal
 from flock.hub import s3
 from pathlib import Path
 from argparse import ArgumentParser
+import os
+import time
+from concurrent.futures import ThreadPoolExecutor
 
 def _stream(ds: lance.LanceDataset, columns: list[str]|None=None, limit: int | None=None, batch_size: int=1024):
     """
@@ -13,6 +16,82 @@ def _stream(ds: lance.LanceDataset, columns: list[str]|None=None, limit: int | N
     """
     scanner = ds.scanner(columns=columns, limit=limit, batch_size=batch_size)
     return scanner.to_reader()
+
+def copy_exact(src_uri: str, version: int | None, dst_dir: str, workers: int = 6) -> int:
+    """
+    Copy one version of a Lance dataset from S3 to local disk, byte for byte (no re-encoding):
+    same files, fragments, row order and version number. Safe to rerun: finished files are skipped.
+
+    Args:
+        src_uri (str): s3 path to dataset
+        version (int): dataset version (None = latest)
+        dst_dir (str): local directory for the copy
+        workers (int): files copied at the same time
+
+    Returns:
+        int: number of rows in the copied version
+    """
+    import boto3
+    from boto3.s3.transfer import TransferConfig
+    from botocore.config import Config
+
+    s3.get_process(read_only=True)
+    ds = lance.dataset(src_uri, version=version)
+    fragments = ds.get_fragments()
+    data_files = [f for frag in fragments for f in frag.metadata.files]
+
+    # what a plain file copy can't reproduce
+    bases = {f.base_id for f in data_files} - {None}
+    if bases:
+        roots = [base.path for id, base in ds.base_paths().items() if id in bases]
+        raise ValueError(f"{src_uri} is a shallow clone; copy the dataset it points to: {roots}")
+    if any(frag.metadata.deletion_file for frag in fragments) or ds.list_indices():
+        raise ValueError("datasets with deleted rows or indices are not supported")
+
+    bucket, _, prefix = src_uri.removeprefix("s3://").partition("/")
+    prefix = prefix.rstrip("/") + "/"
+    client = boto3.client("s3", config=Config(retries={"max_attempts": 10, "mode": "adaptive"},
+                                              max_pool_connections=workers * 4 + 4))
+    size = {}
+    for page in client.get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix=prefix):
+        for obj in page.get("Contents", []):
+            size[obj["Key"][len(prefix):]] = obj["Size"]
+
+    # Lance names manifests either "<2^64-1-version>.manifest" (new) or "<version>.manifest" (old)
+    v = ds.version
+    manifest = next(k for k in (f"_versions/{2**64 - 1 - v}.manifest", f"_versions/{v}.manifest") if k in size)
+    files = sorted({"data/" + f.path for f in data_files})
+    files += [k for k in size if k.startswith(f"_transactions/{v - 1}-")]
+
+    config = TransferConfig(multipart_chunksize=64 << 20, max_concurrency=4)
+
+    def fetch(key: str) -> None:
+        path = os.path.join(dst_dir, key)
+        if os.path.exists(path) and os.path.getsize(path) == size[key]:
+            return
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        for attempt in range(6):
+            try:
+                client.download_file(bucket, prefix + key, path + ".part", Config=config)
+                if os.path.getsize(path + ".part") != size[key]:
+                    raise IOError(f"{key}: incomplete download")
+                os.replace(path + ".part", path)  # only complete files get their final name
+                return
+            except Exception as e:
+                if attempt == 5:
+                    raise
+                print(f"retry {attempt + 1}: {key}: {e}", flush=True)
+                time.sleep(10 * (attempt + 1))
+
+    total, start = sum(size[k] for k in files), time.time()
+    print(f"copying {src_uri} @ v{v}: {len(files)} files, {total / 1e9:.2f} GB", flush=True)
+    with ThreadPoolExecutor(workers) as pool:
+        for _ in pool.map(fetch, files):
+            pass
+    fetch(manifest)  # last: an unfinished copy can't be opened as a dataset
+    print(f"done in {time.time() - start:.0f}s", flush=True)
+
+    return lance.dataset(dst_dir, version=v).count_rows()
 
 def download(src_uri: str, version: int, dst_dir: str, columns: list[str], mode: str="create", limit: int=20):
     """
@@ -208,12 +287,17 @@ def get_args():
     s.add_argument("--offset", type=int, default=0)
     s.add_argument("--width", type=int, default=200, help="truncate long strings")
 
+    c = sub.add_parser("copy", help="S3 -> local, byte for byte")
+    c.add_argument("--src", required=True, help="s3://flock-datasets/...")
+    c.add_argument("--dst", required=True, help="local dir")
+    c.add_argument("--version", type=int, default=0, help="source version (0 = latest)")
+
     return p.parse_args()
 
 if __name__ == "__main__":
     args = get_args()
     if args.cmd == "download":
-        n = download(args.src, version=args.version or None, dst=args.dst, columns=args.columns, mode=args.mode, limit=args.limit or None)
+        n = download(args.src, version=args.version or None, dst_dir=args.dst, columns=args.columns, mode=args.mode, limit=args.limit or None)
         print(f"downloaded {n} rows to {args.dst}")
     if args.cmd == "upload":
         v = upload(args.src, args.dst, mode=args.mode)
@@ -225,4 +309,6 @@ if __name__ == "__main__":
             print(f"#{i} " + " | ".join(
                 f"{k}={(repr(v[:args.width]) + '...') if isinstance(v, str) and len(v) > args.width else repr(v)}"
                 for k, v in r.items()))
-    
+    if args.cmd == "copy":
+        n = copy_exact(args.src, args.version or None, args.dst)
+        print(f"copied {n} rows to {args.dst}")

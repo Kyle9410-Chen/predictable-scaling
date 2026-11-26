@@ -9,7 +9,8 @@ from itertools import islice, batched
 class SequentialLanceDataset(IterableDataset):
     def __init__(self, uri, rank, world_size, version=1, column="text", 
                  buffer_size=4096, seed=0, read_batch_size=256, split="train", 
-                 num_eval_fragment=2, eval_rows=2048, skip: dict[int, int] | None = None):
+                 num_eval_fragment=2, eval_rows=2048, skip: dict[int, int] | None = None,
+                 shuffle: bool=True):
         if split not in ("train", "eval"):
             raise ValueError("split must be train or eval")
         
@@ -25,16 +26,18 @@ class SequentialLanceDataset(IterableDataset):
         self.num_eval_fragment: int = num_eval_fragment
         self.eval_rows: int = eval_rows
         self.skip = skip # a dictionary of [shard: how many fragment to skip]
+        self.shuffle = shuffle
 
     def _read(self, fragments):
         for fragment in fragments:
-            for batch in fragment.to_batches(columns = [self.column], batch_size = self.read_batch_size):
+            for batch in fragment.to_batches(columns = [self.column], batch_size = self.read_batch_size, io_buffer_size=128 * 1024 * 1024):
                 yield from batch.to_pylist()
     
     def _rows(self, shard, num_shards):
-        ds = lance.dataset(self.uri, version=self.version)
+        ds = lance.dataset(self.uri, version=self.version, storage_options={"client_max_retries": "10", "client_retry_timeout": "600"})
         fragments = ds.get_fragments()
-        random.Random(self.seed).shuffle(fragments)
+        if self.shuffle:
+            random.Random(self.seed).shuffle(fragments)
 
         if self.split == "train":
             frags = fragments[self.num_eval_fragment:][shard::num_shards]
@@ -55,6 +58,12 @@ class SequentialLanceDataset(IterableDataset):
         info = get_worker_info()
         worker_id, num_workers = (info.id, info.num_workers) if info else (0, 1)
         shard = self.rank * num_workers + worker_id
+        if not self.shuffle:  # no shuffle buffer either: it would mix the warmup fragments with later ones
+            for row in self._rows(shard, self.world_size * num_workers):
+                row["_shard"], row["_pos"] = shard, row.get("_frag", 0)
+                yield row
+            return
+
         rng = random.Random(self.seed + shard + 1)
         buffer, cur = [], 0
         for row in self._rows(shard, self.world_size * num_workers):
@@ -150,7 +159,7 @@ def packed_collate(items):
     }
 
 def load_dataset(uri: str, rank: int, world_size: int, split: str="train", workers: int=8, batch_size=4, seq_len=8192, skip: dict[int, int] = None,
-                num_eval_fragment=2, eval_rows=2048) -> DataLoader:
+                num_eval_fragment=2, eval_rows=2048, version=1, shuffle=True) -> DataLoader:
     s3.get_process(read_only=True)
 
     tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-3.2-1B")
@@ -167,7 +176,9 @@ def load_dataset(uri: str, rank: int, world_size: int, split: str="train", worke
                 world_size=1,
                 split="eval",
                 num_eval_fragment=num_eval_fragment,
-                eval_rows=eval_rows
+                eval_rows=eval_rows,
+                version=version,
+                shuffle=shuffle,
             )
         rows = list(ds)
         sampler = DistributedSampler(rows, num_replicas=world_size, rank=rank, shuffle=False)
@@ -190,7 +201,9 @@ def load_dataset(uri: str, rank: int, world_size: int, split: str="train", worke
                 split="train",
                 skip=skip,
                 num_eval_fragment=num_eval_fragment,
-                eval_rows=eval_rows
+                eval_rows=eval_rows,
+                version=version,
+                shuffle=shuffle
             )
 
         ds = PackedDataset(base, tokenizer, seq_len)

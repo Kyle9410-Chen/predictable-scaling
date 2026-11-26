@@ -44,13 +44,14 @@ def train(
         model: DistributedDataParallel, 
         opt,
         train_loader: torch.utils.data.DataLoader,
-        eval_loader: torch.utils.data.DataLoader,
         scheduler: TokenLRScheduler,
         dist_info: DistInfo, 
         token_per_step: int,
         max_tokens: int,
         flops_per_token: float, # for MFU calculation
         peak_flops: float, # for MFU calculation
+        eval_loader: torch.utils.data.DataLoader = None,
+        eval_score_fn=None, # a function that take no input and return evaluation score of the model
         log_config: LogConfig=None,
         ckpt_config: CkptConfig=None,
         branch_config: BranchConfig=None,
@@ -232,9 +233,10 @@ def train(
                     {
                         "train/loss": avg_loss.item(), 
                         "train/loss_max": max_loss.item(), 
-                        "train/lr": float(opt.param_groups[0]["lr"]),
-                        "train/lr_muon": float(opt.param_groups[0]["lr"]),
-                        "train/lr_adam": float(opt.param_groups[1]["lr"]),
+                        "train/lr_ratio": scheduler.ratio,
+                        # by group name; a muon group this rank owns no matrix of is absent here
+                        # (its lr is still base * lr_ratio)
+                        **{f"train/lr_{g.get('name', i)}": float(g["lr"]) for i, g in enumerate(opt.param_groups)},
                         "train/total_tokens": tokens_seen,
                         "train/tokens_per_second": tokens_per_sec,
                         "train/mfu": mfu
@@ -244,7 +246,7 @@ def train(
                 print(f"step={step} tokens={tokens_seen:,} loss={avg_loss.item():.4f} loss_max={max_loss.item():.4f}")
 
         # evaluation
-        if step % log_config.eval_every == 0:
+        if eval_loader is not None and step % log_config.eval_every == 0:
             eval_start = time.perf_counter()
             eval_loss = eval(model, eval_loader, dist_info)
             eval_end = time.perf_counter()
@@ -259,6 +261,15 @@ def train(
                     step=step
                 )
 
+        if eval_score_fn is not None and step % log_config.eval_every == 0:
+            eval_start = time.perf_counter()
+            scores = eval_score_fn()
+            eval_end = time.perf_counter()
+            last_time = last_time + (eval_end - eval_start) # leave the eval time out of tokens/sec calculation
+            if dist_info.is_main:
+                wandb.log(scores, step=step)
+                wandb.log({"eval/paloma_eval_seconds": eval_end - eval_start}, step=step) # the score function is paloma in our case
+
         if tokens_seen >= max_tokens:
             break
 
@@ -266,4 +277,5 @@ def train(
             t_end = _t()
 
     if dist_info.is_main:
-        wandb.log({"train/oj_total_tokens": max_tokens})
+        wandb.summary["oj_total_tokens"] = tokens_seen
+        wandb.summary["total_tokens"] = tokens_seen

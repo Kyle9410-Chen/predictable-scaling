@@ -43,10 +43,12 @@ class TokenLRScheduler:
         self.shape = shape
         self.max_tokens = max_tokens
         self.base_lrs = [float(g["lr"]) for g in opt.param_groups]
-    
+        self.ratio = 1.0 # current shape value; every group's lr = base lr * ratio
+
 
     def update(self, tokens_seen: int) -> None:
         ratio = self.shape(min(tokens_seen / self.max_tokens, 1.0))
+        self.ratio = ratio
         for group, base in zip(self.opt.param_groups, self.base_lrs):
             if torch.is_tensor(group["lr"]):
                 group["lr"].fill_(base * ratio)

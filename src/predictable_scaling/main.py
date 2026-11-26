@@ -11,14 +11,16 @@ import torch.distributed as dist
 
 from dataclasses import dataclass
 from torch.nn.parallel import DistributedDataParallel
+from transformers import AutoTokenizer
 
-from predictable_scaling.optimizer import muon, soap, soap_muon
+from predictable_scaling.optimizer import muon, soap, soap_muon, muon_from_specs, soap_muon_from_specs
+from predictable_scaling.hparams import load_hp_config, resolve_groups, resolve_soap, describe
 from predictable_scaling.dataloader import load_dataset
 from predictable_scaling.model import build_model, save_model, predefined_scales
 from predictable_scaling.train import train, LogConfig, BranchConfig, CkptConfig
 from predictable_scaling.scheduler import TokenLRScheduler, cosine_shape, wsd_shape, power_cool_shape
 from predictable_scaling.checkpoint import load_model_weights, load_train_state
-from predictable_scaling.eval import eval
+from predictable_scaling.eval import PalomaEval
 
 @dataclass(frozen=True)
 class DistInfo:
@@ -34,7 +36,7 @@ class DistInfo:
 def setup_distributed() -> DistInfo:
     local_rank = int(os.environ["LOCAL_RANK"])
     torch.cuda.set_device(local_rank)
-    dist.init_process_group("nccl", timeout=datetime.timedelta(minutes=5))
+    dist.init_process_group("nccl", timeout=datetime.timedelta(minutes=30))
     return DistInfo(
         rank = dist.get_rank(),
         world_size = dist.get_world_size(),
@@ -67,10 +69,19 @@ def get_args():
     p.add_argument("--save-dir", type=str, default="models")
     p.add_argument("--profile", action="store_true")
 
+    # per-module hyperparameters (muon / soap-muon). when set, replaces the --adam_* / --muon_* / --wd flags
+    p.add_argument("--hp-config", type=str, default="") # yaml, see hparams.py
+    p.add_argument("--hp", action="append", default=[]) # repeatable dotted override, e.g. --hp groups.embed.lr=3e-3
+
     # checkpoint and branch
     p.add_argument("--ckpt-at", type=str, default="") # comma seperated value. save checkpoint at token count
     p.add_argument("--branch-from", type=str, default="") # the checkpoint you want to branch from
-    
+
+    # dataset
+    p.add_argument("--dataset", type=str, default="s3://flock-datasets/-projects/28/ben-kyle/dolma3_mix_150B_train")
+    p.add_argument("--dataset-version", type=int, default=3)
+    p.add_argument("--no-shuffle", action="store_true")
+
     return p.parse_args()
 
 def main():
@@ -100,8 +111,34 @@ def main():
             layer.compile()
         
         model = DistributedDataParallel(model, device_ids=[dist_info.local_rank])
-         
-        if args.opt == "muon":
+
+        # Build Paloma scoring
+        tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-3.2-1B")
+        if dist_info.is_main:
+            paloma_eval_full = PalomaEval(model.module, tokenizer, dist_info)
+            paloma_eval_small = PalomaEval(model.module, tokenizer, dist_info, docs_per_source=256)
+        dist.barrier()
+        if not dist_info.is_main:
+            paloma_eval_full = PalomaEval(model.module, tokenizer, dist_info)
+            paloma_eval_small = PalomaEval(model.module, tokenizer, dist_info, docs_per_source=256)
+
+        hp_specs = None
+        if args.hp_config:
+            if args.opt not in ("muon", "soap-muon"):
+                raise ValueError("--hp-config is only supported with --opt muon or soap-muon")
+            hp_cfg = load_hp_config(args.hp_config, args.hp)
+            hp_specs = resolve_groups(hp_cfg, model.module)
+            soap_hp = resolve_soap(hp_cfg) if args.opt == "soap-muon" else {}
+            if args.opt == "soap-muon":
+                opt = soap_muon_from_specs(model, hp_specs, soap_hp)
+            else:
+                opt = muon_from_specs(model, hp_specs)
+            if dist_info.is_main:
+                for name, hp in describe(hp_specs).items():
+                    print(f"hp group {name}: {hp}")
+        elif args.hp:
+            raise ValueError("--hp needs --hp-config")
+        elif args.opt == "muon":
             opt = muon(model, adam_lr=args.adam_lr, adam_beta1=args.adam_beta1, adam_beta2=args.adam_beta2, muon_lr=args.muon_lr, muon_momentum=args.muon_momentum, wd=args.wd, adam_eps=args.adam_eps)
         elif args.opt == "soap":
             opt = soap(model, lr=args.soap_lr)
@@ -112,12 +149,13 @@ def main():
         
         start_state, skip, progress = None, None, None
         if src:
-            start_state, progress = load_train_state(src, opt, dist_info)
+            start_state, progress = load_train_state(src, opt, dist_info, model)
             skip = {shard: frag + 1 for shard, frag in progress.items()}
 
-        train_loader = load_dataset("s3://flock-datasets/lab7/ben-kyle/dolma3_mix_150B_paloma_decon", dist_info.rank, dist_info.world_size, split="train", batch_size=args.batch_size, seq_len=seq_len, skip=skip)
-        eval_loader = load_dataset("s3://flock-datasets/lab7/ben-kyle/dolma3_mix_150B_paloma_decon", dist_info.rank, dist_info.world_size, split="eval", workers=4)
-        paloma_eval_loader = load_dataset("s3://flock-datasets/paloma", dist_info.rank, dist_info.world_size, split="eval", num_eval_fragment=1142, eval_rows=309383)
+        train_loader = load_dataset(args.dataset, dist_info.rank, dist_info.world_size, split="train", 
+                                    batch_size=args.batch_size, seq_len=seq_len, skip=skip, version=args.dataset_version,
+                                    workers=4, shuffle=not args.no_shuffle,
+                                    num_eval_fragment=0 if args.no_shuffle else 2)
 
         if args.lr_scheduler == "wsd":
             shape = wsd_shape(decay_frac=args.decay_frac, min_ratio=args.lr_min_ratio)
@@ -131,6 +169,12 @@ def main():
         run_config = {
             **vars(args)
         }
+        if hp_specs is not None:
+            run_config["hp"] = describe(hp_specs) # resolved values, filterable as hp.<group>.<key>
+            if soap_hp:
+                run_config["hp"]["soap"] = soap_hp
+            for k in ("adam_lr", "adam_beta1", "adam_beta2", "adam_eps", "muon_lr", "muon_momentum", "wd"):
+                run_config.pop(k) # unused with --hp-config; drop so they can't be mistaken for real values
 
         branch_config = None
         if src:
@@ -148,11 +192,11 @@ def main():
             model=model,
             opt=opt, 
             train_loader=train_loader, 
-            eval_loader=eval_loader, 
             scheduler=scheduler,
             dist_info=dist_info, 
             max_tokens=max_tokens, 
             token_per_step=dist_info.world_size * (args.batch_size * seq_len - 1),
+            
             log_config=LogConfig(
                 name=args.name, 
                 log_every=args.log_every,
@@ -161,6 +205,7 @@ def main():
                 config=run_config,
                 profile=args.profile
                 ),
+            eval_score_fn=paloma_eval_small,
             branch_config=branch_config,
             ckpt_config=ckpt_config,
             flops_per_token=flops_per_token,
@@ -174,15 +219,13 @@ def main():
 
         # paloma eval
         eval_start = time.perf_counter()
-        paloma_loss = eval(model, paloma_eval_loader, dist_info)
+        scores = paloma_eval_full()
         eval_end = time.perf_counter()
         if dist_info.is_main:
-            wandb.log(
-                {
-                    "eval/paloma_ppl": torch.exp(torch.tensor(paloma_loss)),
-                    "eval/paloma_eval_seconds": eval_end - eval_start
-                },
-            )
+            wandb.log(scores)
+            wandb.log({"eval/paloma_eval_seconds": eval_end - eval_start})
+            wandb.summary["paloma_bpb"] = scores["eval/paloma_bpb"]
+            wandb.summary["paloma_ppl"] = scores["eval/paloma_bpb"] # The OJ read `paloma_ppl`, which is wrong, but just do it.
 
     except BaseException:
         traceback.print_exc()

@@ -1,0 +1,18 @@
+# 150M / 30B row of the "hyper parameter transfer" sheet, tab "Muon fixed batchsize" (soap-muon).
+# Final values only, copied from the sheet (letters = sheet columns). muonium applies its own
+# sqrt(max(1, out/in)) to the Muon lr on top; the sheet values already account for that.
+
+muon:  {momentum: 0.95, wd: 0.1}  # K, J
+adamw: {one_minus_betas: [0.1, 0.001], wd: 0.1}  # R, S (1-beta, pasted as-is), U (norms)
+soap:  {one_minus_shampoo_beta: 0.001}  # V
+
+# first regex match wins, top to bottom; every parameter must match exactly one group
+groups:
+  attn_qo:     {match: 'self_attn\.(q|o)_proj', algorithm: muon, lr: 0.0025}  # F
+  attn_kv:     {match: 'self_attn\.(k|v)_proj', algorithm: muon, lr: 0.0025}  # G
+  mlp_up:      {match: 'mlp\.(gate|up)_proj', algorithm: muon, lr: 0.0025}  # H
+  mlp_down:    {match: 'mlp\.down_proj', algorithm: muon, lr: 0.0025}  # I
+  # embed_tokens is tied with lm_head: unembedding columns M, Q, T cover both.
+  embed:       {match: 'embed_tokens', algorithm: adamw, lr: 0.0012, eps: 1.0e-8, wd: 0.1}  # M, Q, T
+  final_norm:  {match: '^model\.norm\.', algorithm: adamw, lr: 0.0012, eps: 1.0e-8}  # L, Q
+  hidden_norm: {match: 'layernorm', algorithm: adamw, lr: 0.0012, eps: 1.0e-8}  # N, P

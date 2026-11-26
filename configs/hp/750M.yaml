@@ -1,0 +1,17 @@
+# 750M / 150B row of the "hyper parameter transfer" sheet, tab "Muon fixed batchsize".
+# Final values only, copied from the sheet (letters = sheet columns). muonium applies its own
+# sqrt(max(1, out/in)) to the Muon lr on top; the sheet values already account for that.
+
+muon:  {momentum: 0.95, wd: 0.019166296949998197}  # K, J
+adamw: {one_minus_betas: [0.02, 0.0002], wd: 0.044721359549995794}  # R, S (1-beta, pasted as-is), U (norms)
+
+# first regex match wins, top to bottom; every parameter must match exactly one group
+groups:
+  attn_qo:     {match: 'self_attn\.(q|o)_proj', algorithm: muon, lr: 0.0007595545253127499}  # F
+  attn_kv:     {match: 'self_attn\.(k|v)_proj', algorithm: muon, lr: 0.0007595545253127499}  # G
+  mlp_up:      {match: 'mlp\.(gate|up)_proj', algorithm: muon, lr: 0.0007595545253127499}  # H
+  mlp_down:    {match: 'mlp\.down_proj', algorithm: muon, lr: 0.0008380579557069701}  # I
+  # embed_tokens is tied with lm_head: unembedding columns M, Q, T cover both.
+  embed:       {match: 'embed_tokens', algorithm: adamw, lr: 0.00022999556339997832, eps: 2.2360679774997898e-8, wd: 0.1043498389499902}  # M, Q, T
+  final_norm:  {match: '^model\.norm\.', algorithm: adamw, lr: 0.0005366563145999494, eps: 2.2360679774997898e-8}  # L, Q
+  hidden_norm: {match: 'layernorm', algorithm: adamw, lr: 0.0003645861721501199, eps: 6.5104673598235715e-9}  # N, P
