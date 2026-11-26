@@ -225,6 +225,7 @@ def main():
             wandb.log(scores)
             wandb.log({"eval/paloma_eval_seconds": eval_end - eval_start})
             wandb.summary["paloma_bpb"] = scores["eval/paloma_bpb"]
+            wandb.summary["paloma_ppl"] = scores["eval/paloma_bpb"] # The OJ read `paloma_ppl`, which is wrong, but just do it.
 
     except BaseException:
         traceback.print_exc()
