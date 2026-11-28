@@ -269,8 +269,11 @@ removed in transformers 5.x).
   packed windows are identical with either change.
 - **lm-eval precision.** Use `dtype=float32` for likelihood-based comparisons; in bfloat16 the per-document
   log-likelihood sums are rounded (logged values like −1360.0).
-- **Run naming.** `iclm_k10` (job 868646) trained under the old name `warmup-flesch-600M-dolma3mix-150M-1.5B`;
-  its checkpoint overwrote the earlier flesch checkpoint of that name.
+- **Run naming.** `iclm_k10` (job 868646) trained under the old name `warmup-flesch-600M-dolma3mix-150M-1.5B`
+  (W&B run name and checkpoint); its checkpoint overwrote the earlier flesch checkpoint of that name and has been
+  renamed to `models/iclm-k10-t0.94-dolma3mix-150M-30B`.
+- **Reproducing §3.2, §3.3, §3.5:** `sbatch src/predictable_scaling/sbatch/benchmark.sh`
+  (`src/predictable_scaling/benchmark.py`: `evaluate`, `language-modeling`, `multiple-choice`).
 - **Cost of the pipeline.** On 8 × H200: embed 22 min, exact kNN 27 min, dedup + chains + report ~20 min, each
   dataset write + check ~15–18 min (CPU).
 
