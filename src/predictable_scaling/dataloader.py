@@ -82,7 +82,7 @@ class SequentialLanceDataset(IterableDataset):
             yield out
 
 class PackedDataset(IterableDataset):
-    def __init__(self, base: SequentialLanceDataset, tokenizer, seq_len=8192, column="text", tokenize_batch=256):
+    def __init__(self, base: SequentialLanceDataset, tokenizer, seq_len=8192, column="text", tokenize_batch=32):
         self.base = base
         self.tokenizer = tokenizer
         self.seq_len = seq_len
